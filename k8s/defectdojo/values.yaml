@@ -1,19 +1,21 @@
-# DefectDojo Helm chart: https://github.com/DefectDojo/django-DefectDojo
+# DefectDojo Helm chart values — low-resource profile for <=16GB RAM labs.
+# Merged from colleague's resource-constrained config + scaffolding defaults.
 #
 # Add the repo:
 #   helm repo add defectdojo https://raw.githubusercontent.com/DefectDojo/django-DefectDojo/helm-charts
 #   helm repo update
-# Inspect the full upstream defaults and copy to docs/ for reference:
-#   helm show values defectdojo/defectdojo > docs/defectdojo-defaults.yaml
-#
 # Install:
 #   helm install defectdojo defectdojo/defectdojo -n voc-core -f k8s/defectdojo/values.yaml
 #
-# This file is a minimal lab override for a single-node k3s cluster. Tune to your host.
+# Total estimated RAM with these limits: ~3 GB (DD) + 2 GB (PG) + 1 GB (valkey) = ~6 GB
+# Leave ~10 GB for k3s, n8n, TheHive, monitoring, and scanners.
 
 tag: latest
 siteUrl: http://localhost:8080
 domain: localhost
+
+createSecret: true
+host: defectdojo.local
 
 ingress:
   enabled: false
@@ -21,24 +23,38 @@ ingress:
 networkPolicy:
   enabled: false
 
-# Bundled Postgres + Redis for the lab (not HA, not for production).
+# Bundled Postgres (not HA, lab only). Enable persistence to keep data
+# across cluster restarts; disable for an ephemeral lab.
 postgresql:
   enabled: true
-  primary:
-    persistence:
-      size: 10Gi
-      storageClass: local-path
-
-redis:
-  enabled: true
-
-django:
-  replicas: 1
+  postgresqlPassword: CHANGE_ME_DOJO_PG
+  persistence:
+    enabled: false
+    size: 10Gi
+    storageClass: local-path
   resources:
-    requests: { cpu: 250m, memory: 512Mi }
-    limits:   { cpu: 1000m, memory: 1Gi }
+    limits:
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+# Valkey = modern Redis fork used by recent DefectDojo chart versions.
+valkey:
+  enabled: true
+  password: CHANGE_ME_DOJO_VALKEY
+  persistence:
+    enabled: false
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
 
 celery:
+  enabled: true
+  password: CHANGE_ME_DOJO_CELERY
   broker:
     replicas: 1
   beat:
@@ -46,8 +62,23 @@ celery:
   worker:
     replicas: 1
   resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits:   { cpu: 500m, memory: 512Mi }
+    limits:
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+django:
+  replicas: 1
+  resources:
+    limits:
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  uwsgi:
+    processes: 2
+    threads: 2
 
 initializer:
   enabled: true

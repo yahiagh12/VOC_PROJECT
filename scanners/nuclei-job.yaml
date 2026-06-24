@@ -1,6 +1,10 @@
 # Nuclei scanner — template-based DAST against lab targets.
 # Manual run:  kubectl create job manual-nuclei --from=cronjob/nuclei -n scanning
 # First run is slow: Nuclei downloads/updates templates.
+#
+# IMPORTANT: DefectDojo's Nuclei parser expects a JSON ARRAY, but Nuclei
+# outputs JSONL (one JSON object per line). A conversion init container
+# using jq is included below (adapted from colleague's scan-all.sh fix).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -27,12 +31,29 @@ spec:
                 - "-update-templates"
                 - "-u"
                 - "$(TARGET_URL)"
-                - "-j"
+                - "-jsonl"
                 - "-o"
                 - "/work/nuclei.jsonl"
               env:
                 - name: TARGET_URL
                   value: "http://juice-shop.targets.svc.cluster.local:3000"
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+            - name: convert-jsonl
+              image: alpine:3.20
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  apk add --no-cache jq >/dev/null 2>&1
+                  if [ -s /work/nuclei.jsonl ]; then
+                    jq -s '.' /work/nuclei.jsonl > /work/nuclei.json
+                    echo "Converted JSONL to JSON array: $(wc -l < /work/nuclei.jsonl) findings"
+                  else
+                    echo "[]" > /work/nuclei.json
+                    echo "No Nuclei findings to convert"
+                  fi
               volumeMounts:
                 - name: work
                   mountPath: /work
@@ -43,11 +64,14 @@ spec:
               args:
                 - |
                   set -e
-                  if [ -z "${DD_URL}" ]; then echo "DD_URL not set; skipping upload"; head -c 500 /work/nuclei.jsonl; exit 0; fi
-                  echo "Uploading Nuclei JSONL to DefectDojo"
+                  if [ -z "${DD_URL}" ]; then echo "DD_URL not set; skipping upload"; head -c 500 /work/nuclei.json; exit 0; fi
+                  if [ ! -s /work/nuclei.json ] || [ "$(cat /work/nuclei.json)" = "[]" ]; then
+                    echo "No findings to upload"; exit 0
+                  fi
+                  echo "Uploading Nuclei JSON to DefectDojo"
                   curl -sS -X POST "${DD_URL}/api/v2/import-scan/" \
                     -H "Authorization: Token ${DD_API_KEY}" \
-                    -F "file=@/work/nuclei.jsonl" \
+                    -F "file=@/work/nuclei.json" \
                     -F "scan_type=Nuclei Scan" \
                     -F "product_name=${DD_PRODUCT_NAME}" \
                     -F "engagement_name=${DD_ENGAGEMENT_NAME}" \

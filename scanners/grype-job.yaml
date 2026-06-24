@@ -1,4 +1,4 @@
-# Grype scanner — scans a container image for vulnerabilities.
+# Grype scanner — scans a container image for vulnerabilities (SCA).
 # Manual run:  kubectl create job manual-grype --from=cronjob/grype -n scanning
 # First run is slow: Grype downloads/syncs its vulnerability DB.
 apiVersion: batch/v1
@@ -47,7 +47,7 @@ spec:
                   curl -sS -X POST "${DD_URL}/api/v2/import-scan/" \
                     -H "Authorization: Token ${DD_API_KEY}" \
                     -F "file=@/work/grype.json" \
-                    -F "scan_type=Grype JSON" \
+                    -F "scan_type=Anchore Grype" \
                     -F "product_name=${DD_PRODUCT_NAME}" \
                     -F "engagement_name=${DD_ENGAGEMENT_NAME}" \
                     -F "auto_create_contexts=true"

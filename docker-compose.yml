@@ -1,0 +1,41 @@
+# Docker Compose for the VOC dev toolbox.
+# Usage:
+#   docker compose build
+#   docker compose run --rm voc        # interactive shell
+#   docker compose run --rm voc voc-up # one-shot command
+#
+# The toolbox has kubectl, helm, k3d, docker CLI, jq, yq, python, git.
+# The repo is mounted at /workspace. The Docker socket is mounted so
+# the toolbox can create k3d clusters (k3s-in-docker) and run scanner
+# containers. The kubeconfig is written to .kube/ in the repo root so
+# it's accessible from the Windows host too.
+#
+# On Windows host, after voc-up:
+#   $env:KUBECONFIG = "C:\Users\Regal\Desktop\voc\.kube\config"
+#   kubectl get nodes
+
+services:
+  voc:
+    build:
+      context: ./toolbox
+      dockerfile: Dockerfile
+    image: voc-toolbox:latest
+    container_name: voc
+    volumes:
+      # Repo mounted at /workspace (read-write for building images, etc.)
+      - .:/workspace
+      # Docker socket — lets the toolbox create k3d clusters + run scanner containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent caches (survive container restarts, not on host filesystem)
+      - voc-k3d:/root/.k3d
+      - voc-helm:/root/.cache/helm
+    # Ensures host.docker.internal resolves (built-in on Docker Desktop, needed on Linux)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+
+volumes:
+  voc-k3d:
+  voc-helm:

@@ -94,6 +94,16 @@ $RECYCLE.BIN/
 .classpath
 .settings/
 
+# ---- VOC runtime artifacts ----
+# kubeconfig written by k3d (contains cluster credentials)
+.kube/
+# generated scan reports + scanner working dirs
+scanners/reports/
+scanners/zap/
+scanners/nuclei-templates/
+# dynamically generated ZAP plan (keep config/zap-plan.yaml checked in)
+config/zap-plan-auto.yaml
+
 # ---- Misc ----
 *.log
 logs/
