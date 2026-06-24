@@ -43,6 +43,7 @@ spec:
       containers:
         - name: prioritization-service
           image: prioritization-service:0.1.0
+          imagePullPolicy: Never
           ports:
             - containerPort: 8000
               name: http

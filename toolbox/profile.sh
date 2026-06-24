@@ -40,9 +40,9 @@ voc_deploy() {
         --create-namespace -f "$REPO_DIR/k8s/defectdojo/values.yaml"
       ;;
     n8n)
-      helm repo add n8n https://charts.n8n.io 2>/dev/null || true
+      helm repo add community-charts https://community-charts.github.io/helm-charts 2>/dev/null || true
       helm repo update
-      helm upgrade --install n8n n8n/n8n -n voc-core \
+      helm upgrade --install n8n community-charts/n8n -n voc-core \
         --create-namespace -f "$REPO_DIR/k8s/n8n/values.yaml"
       ;;
     thehive)
@@ -62,6 +62,11 @@ voc_deploy() {
       kubectl apply -f "$REPO_DIR/scanners/"
       ;;
     prio|prioritization)
+      local cluster="${K3D_CLUSTER_NAME:-voc}"
+      echo "[VOC] Building prioritization-service image..."
+      docker build -t prioritization-service:0.1.0 "$REPO_DIR/prioritization-service/"
+      echo "[VOC] Importing image into k3d cluster '$cluster'..."
+      k3d image import prioritization-service:0.1.0 -c "$cluster"
       kubectl apply -f "$REPO_DIR/prioritization-service/deployment.yaml"
       ;;
     monitoring)
@@ -114,7 +119,7 @@ voc_forward() {
   local svc="$1" ports="$2"
   local ns="${svc%%/*}" name="${svc##*/}"
   echo "[VOC] Port-forwarding svc/$name in ns/$ns -> localhost:$ports"
-  kubectl port-forward -n "$ns" "svc/$name" "$ports"
+  kubectl port-forward --address 0.0.0.0 -n "$ns" "svc/$name" "$ports"
 }
 
 voc_logs() {
@@ -156,7 +161,17 @@ From Windows host (outside toolbox):
 EOF
 }
 
-# Aliases
+# Aliases — hyphenated names (as shown in banner)
+alias voc-up="voc_up"
+alias voc-down="voc_down"
+alias voc-status="voc_status"
+alias voc-deploy="voc_deploy"
+alias voc-scan="voc_scan"
+alias voc-forward="voc_forward"
+alias voc-logs="voc_logs"
+alias voc-help="voc_help"
+
+# Short aliases
 alias vu="voc_up"
 alias vd="voc_down"
 alias vs="voc_status"

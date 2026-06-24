@@ -21,15 +21,15 @@ services:
       dockerfile: Dockerfile
     image: voc-toolbox:latest
     container_name: voc
+    ports:
+      - "8080:8080" # DefectDojo
+      - "5678:5678" # n8n
+      - "3000:3000" # Juice Shop
     volumes:
-      # Repo mounted at /workspace (read-write for building images, etc.)
       - .:/workspace
-      # Docker socket — lets the toolbox create k3d clusters + run scanner containers
       - /var/run/docker.sock:/var/run/docker.sock
-      # Persistent caches (survive container restarts, not on host filesystem)
       - voc-k3d:/root/.k3d
       - voc-helm:/root/.cache/helm
-    # Ensures host.docker.internal resolves (built-in on Docker Desktop, needed on Linux)
     extra_hosts:
       - "host.docker.internal:host-gateway"
     working_dir: /workspace

@@ -1,5 +1,4 @@
 # DefectDojo Helm chart values — low-resource profile for <=16GB RAM labs.
-# Merged from colleague's resource-constrained config + scaffolding defaults.
 #
 # Add the repo:
 #   helm repo add defectdojo https://raw.githubusercontent.com/DefectDojo/django-DefectDojo/helm-charts
@@ -15,7 +14,9 @@ siteUrl: http://localhost:8080
 domain: localhost
 
 createSecret: true
-host: defectdojo.local
+createValkeySecret: true
+createPostgresqlSecret: true
+host: localhost
 
 ingress:
   enabled: false
@@ -23,50 +24,47 @@ ingress:
 networkPolicy:
   enabled: false
 
-# Bundled Postgres (not HA, lab only). Enable persistence to keep data
-# across cluster restarts; disable for an ephemeral lab.
+# Bundled Postgres (not HA, lab only).
 postgresql:
   enabled: true
-  postgresqlPassword: CHANGE_ME_DOJO_PG
-  persistence:
-    enabled: false
-    size: 10Gi
-    storageClass: local-path
-  resources:
-    limits:
-      memory: 512Mi
-    requests:
-      cpu: 100m
-      memory: 256Mi
+  auth:
+    postgresPassword: CHANGE_ME_DOJO_PG
+    password: CHANGE_ME_DOJO_PG
+  primary:
+    persistence:
+      enabled: false
+      size: 10Gi
+      storageClass: local-path
+    resources:
+      limits:
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
 
 # Valkey = modern Redis fork used by recent DefectDojo chart versions.
 valkey:
   enabled: true
-  password: CHANGE_ME_DOJO_VALKEY
-  persistence:
-    enabled: false
-  resources:
-    limits:
-      memory: 256Mi
-    requests:
-      cpu: 50m
-      memory: 128Mi
+  auth:
+    password: CHANGE_ME_DOJO_VALKEY
+  master:
+    persistence:
+      enabled: false
+    resources:
+      limits:
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 128Mi
 
 celery:
   enabled: true
-  password: CHANGE_ME_DOJO_CELERY
   broker:
     replicas: 1
   beat:
     replicas: 1
   worker:
     replicas: 1
-  resources:
-    limits:
-      memory: 512Mi
-    requests:
-      cpu: 100m
-      memory: 256Mi
 
 django:
   replicas: 1

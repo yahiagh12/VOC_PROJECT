@@ -1,46 +1,34 @@
-# n8n self-hosted Helm chart.
+# n8n self-hosted — community-charts/n8n Helm chart.
 #
-# Add the repo (verify the official chart location/version):
-#   helm repo add n8n https://charts.n8n.io
+# Add the repo:
+#   helm repo add community-charts https://community-charts.github.io/helm-charts
 #   helm repo update
-#   helm show values n8n/n8n > docs/n8n-defaults.yaml
+#   helm show values community-charts/n8n > docs/n8n-defaults.yaml
 #
 # Install:
-#   helm install n8n n8n/n8n -n voc-core -f k8s/n8n/values.yaml
-#
-# NOTE: chart value keys can vary between releases; confirm against
-# `helm show values` for the version you pull.
+#   helm install n8n community-charts/n8n -n voc-core -f k8s/n8n/values.yaml
 
 image:
-  tag: lts
-
-n8n_encryption_key: "REPLACE_WITH_RANDOM_32_BYTE_STRING"
-
-public_host: "http://localhost:5678"
-
-persistence:
-  enabled: true
-  size: 5Gi
-  storageClass: local-path
+  tag: latest
 
 ingress:
   enabled: false
+
+service:
+  type: ClusterIP
+  port: 5678
 
 resources:
   requests: { cpu: 100m, memory: 256Mi }
   limits:   { cpu: 500m, memory: 1Gi }
 
-config:
-  executions: "prune"
-  executionMode: "regular"
+# Use bundled PostgreSQL (lab-only, not HA).
+db:
+  type: postgresdb
 
-# External DB: keep the bundled/internal DB for the lab.
-postgres:
+postgresql:
   enabled: true
-  primary:
-    persistence:
-      size: 5Gi
-      storageClass: local-path
-
-redis:
-  enabled: true
+  auth:
+    database: "n8n"
+    username: "n8n"
+    password: "n8n-lab-password"

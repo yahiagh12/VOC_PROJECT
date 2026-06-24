@@ -1,19 +1,93 @@
 # VOC Project — Vulnerability Operations Center
 
-A self-hosted, open-source vulnerability management platform. Scanners push
-findings into DefectDojo, a FastAPI prioritization service blends CVSS + EPSS
-into a priority score, n8n routes critical/high findings into TheHive cases
-and chat notifications, and Grafana dashboards report MTTR, SLA breaches,
-and scan coverage.
+A self-hosted, open-source vulnerability management platform. Scanners push findings into DefectDojo, a FastAPI prioritization service blends CVSS + EPSS into a priority score, n8n routes critical/high findings into TheHive cases and chat notifications, and Grafana dashboards report MTTR, SLA breaches, and scan coverage.
 
-Built for resource-constrained lab environments (≤ 16 GB RAM). Runs on k3d
-(k3s-in-Docker) inside a dev toolbox container.
+Built for resource-constrained lab environments (≤ 16 GB RAM). Runs on k3d (k3s-in-Docker) inside a dev toolbox container.
 
-> Tool-selection rationale: see [`etude_comparative.html`](etude_comparative.html)
-> (covers all 7 components: Nuclei, ZAP, Grype, DefectDojo, n8n, TheHive,
-> Grafana+Prometheus).
->
-> Deployment progress: see [`docs/checklist.md`](docs/checklist.md).
+---
+
+## Quick Start Guide
+
+This guide will walk you through setting up the entire Vulnerability Operations Center locally on Windows using Docker Desktop.
+
+### 1. Prerequisites
+- **Docker Desktop**: Installed and running.
+- **Git**: To clone this repository.
+- Windows PowerShell (Run as Administrator is recommended but not required).
+
+### 2. Build and Start the Toolbox
+Open PowerShell, navigate to the cloned repository, and start the development container. The `--service-ports` flag is crucial as it exposes the web interfaces (DefectDojo, n8n, etc.) to your Windows host.
+
+```powershell
+# Navigate to the project directory
+cd path\to\VOC_PROJECT
+
+# Build the toolbox container (takes ~3-5 minutes the first time)
+docker compose build
+
+# Start the toolbox with port forwarding enabled
+docker compose run --service-ports --rm voc
+```
+
+### 3. Deploy the Kubernetes Cluster
+Once inside the container shell (`root@...:/workspace#`), initialize the local Kubernetes cluster (k3d):
+
+```bash
+# Load the helper functions
+source /workspace/toolbox/profile.sh
+
+# Create the cluster and namespaces
+voc-up
+```
+
+### 4. Deploy Components
+Deploy the complete stack, including DefectDojo, n8n, Juice Shop (target), scanners, and the custom prioritization service:
+
+```bash
+# Deploy all services
+voc-deploy all
+
+# Check the status of the deployment
+voc-status
+```
+*Note: Wait until all pods in `voc-status` show a `Running` status. DefectDojo usually takes 3-5 minutes to fully initialize.*
+
+### 5. Access the Web Interfaces
+To access the applications from your Windows browser, you need to port-forward them from the container.
+
+**DefectDojo (Vulnerability Management)**
+1. Run the port-forward command in your container:
+   ```bash
+   voc-forward voc-core/defectdojo-django 8080:80 &
+   ```
+   *(The `&` runs it in the background so you can keep using the shell)*
+2. Open your browser: **http://localhost:8080**
+3. Retrieve the admin password:
+   ```bash
+   echo $(kubectl get secret defectdojo -n voc-core -o jsonpath='{.data.DD_ADMIN_PASSWORD}' | base64 --decode)
+   ```
+   *(Username is `admin`)*
+
+**n8n (Workflow Automation)**
+1. Port-forward the service:
+   ```bash
+   voc-forward voc-core/n8n 5678:5678 &
+   ```
+2. Open your browser: **http://localhost:5678**
+
+**Juice Shop (Vulnerable Target App)**
+1. Port-forward the service:
+   ```bash
+   voc-forward targets/juice-shop 3000:3000 &
+   ```
+2. Open your browser: **http://localhost:3000**
+
+### 6. Run a Vulnerability Scan
+Trigger a scan pipeline (Grype + Nuclei + ZAP) against the targets. The results will be automatically pushed into DefectDojo.
+
+```bash
+voc-scan
+```
 
 ---
 
@@ -51,74 +125,11 @@ Built for resource-constrained lab environments (≤ 16 GB RAM). Runs on k3d
   Cluster: k3d (k3s-in-Docker) inside the VOC dev toolbox
 ```
 
-Full write-up: [`docs/architecture.md`](docs/architecture.md).
-
----
-
-## Quick start
-
-```powershell
-# 0. Prerequisites: Docker Desktop + this repo
-cd C:\Users\Regal\Desktop\voc
-
-# 1. Build the toolbox image (3-5 min first time)
-docker compose build
-
-# 2. Copy .env and fill in real values later
-Copy-Item .env.example .env
-
-# 3. Enter the toolbox
-docker compose run --rm voc
-```
-
-Inside the toolbox:
-
-```bash
-voc-up           # create k3d cluster + namespaces
-voc-deploy all   # deploy the full stack (DefectDojo, n8n, targets, scanners, monitoring)
-voc-status       # check pod status
-voc-forward voc-core/defectdojo-django-svc 8080:8080  # access DefectDojo UI
-voc-scan         # run Grype + Nuclei + ZAP, import to DefectDojo
-```
-
-Full walkthrough: [`docs/setup.md`](docs/setup.md).
-
----
-
-## Repo layout
-
-```
-voc/
-├── toolbox/                # dev toolbox (Dockerfile + entrypoint + helpers)
-├── docker-compose.yml      # runs the toolbox with repo + docker socket mounted
-├── .env.example            # copy to .env, fill in DD_API_KEY etc.
-├── k8s/
-│   ├── namespaces/         # namespace manifests (voc-core, scanning, monitoring, targets)
-│   ├── defectdojo/         # helm values (low-resource profile for ≤16GB RAM)
-│   ├── n8n/                # helm values
-│   ├── thehive/            # helm values
-│   ├── monitoring/         # kube-prometheus-stack values + Grafana dashboard JSON
-│   └── targets/            # Juice Shop + DVWA deployments
-├── scanners/               # Grype / ZAP / Nuclei CronJob manifests
-├── config/
-│   └── zap-plan.yaml       # OWASP ZAP Automation Framework plan
-├── prioritization-service/ # FastAPI service (CVSS + EPSS scoring)
-├── n8n-workflows/          # exported n8n workflow JSON
-├── scripts/
-│   ├── k3d-up.sh           # create k3d cluster + namespaces
-│   └── scan-all.sh         # scan pipeline (Grype + Nuclei + ZAP → DefectDojo)
-├── etude_comparative.html  # tool selection rationale (7 components)
-└── docs/
-    ├── architecture.md     # architecture + data flow + scoring formula
-    ├── setup.md            # step-by-step setup guide
-    └── checklist.md        # deployment progress tracker
-```
-
 ---
 
 ## Components (all open-source, community editions)
 
-| Layer          | Tool                    | Why (see etude_comparative.html)              |
+| Layer          | Tool                    | Why                                           |
 |----------------|-------------------------|-----------------------------------------------|
 | Infra/Net scan | Nuclei                  | Ultra-light, low false positives, k8s Job     |
 | Web app scan   | OWASP ZAP               | Free, headless, active+passive, DD parser     |
@@ -130,10 +141,11 @@ voc/
 
 ---
 
-## Free / community editions only
+## Troubleshooting
 
-No paid tiers. All components are open-source community editions. The only
-external dependency is the EPSS API (api.first.org) which is free.
+- **400 Bad Request on DefectDojo:** Ensure you are accessing via `http://localhost:8080` (not 127.0.0.1 or another host), as Django's `ALLOWED_HOSTS` is strictly configured.
+- **Port already allocated:** If Docker complains about ports, you might have left a previous container running. Run `docker ps` to find it, and `docker kill <id>` to stop it.
+- **Commands not found:** Always run `source /workspace/toolbox/profile.sh` when you open a new shell inside the container to load the `voc-*` commands.
 
 ## Notes
 
