@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prioritization-config
+  namespace: voc-core
+data:
+  DEFECTDOJO_URL: "http://defectdojo-django-svc.voc-core.svc.cluster.local:8080"
+  DEFECTDOJO_VERIFY_TLS: "false"
+  EPSS_API_URL: "https://api.first.org/data/v1/epss"
+  CVSS_WEIGHT: "0.5"
+  EPSS_WEIGHT: "0.5"
+  EPSS_HIGH_THRESHOLD: "0.7"
+  RUN_SCHEDULER: "true"
+  SCORING_INTERVAL_SECONDS: "3600"
+  LOG_LEVEL: "INFO"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: prioritization-secrets
+  namespace: voc-core
+type: Opaque
+stringData:
+  DEFECTDOJO_API_KEY: "REPLACE_WITH_REAL_DD_API_KEY"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prioritization-service
+  namespace: voc-core
+  labels:
+    app: prioritization-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prioritization-service
+  template:
+    metadata:
+      labels:
+        app: prioritization-service
+    spec:
+      containers:
+        - name: prioritization-service
+          image: prioritization-service:0.1.0
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: prioritization-config
+            - secretRef:
+                name: prioritization-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prioritization-service
+  namespace: voc-core
+spec:
+  selector:
+    app: prioritization-service
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

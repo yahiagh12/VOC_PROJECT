@@ -1,0 +1,126 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "VOC dashboard scaffold. PromQL-sourced panels are placeholders; DefectDojo-sourced panels need a metrics exporter (TBD: small exporter or direct Postgres queries via a Grafana datasource).",
+  "editable": true,
+  "graphTooltip": 0,
+  "id": null,
+  "panels": [
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "content": "### Open vulnerabilities by severity over time\n\nNeeds a DefectDojo metrics exporter. Placeholder panel.\n\nTODO: replace with a timeseries querying `voc_findings_open{severity=\"Critical|High|Medium|Low\"}` once the exporter exists.",
+        "mode": "markdown"
+      },
+      "title": "Open Vulns by Severity (TBD)",
+      "type": "text"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "id": 2,
+      "options": {
+        "content": "### Mean Time To Remediate (MTTR)\n\nPlaceholder. Query will be `avg(voc_finding_mttr_seconds)` once exporter exists.",
+        "mode": "markdown"
+      },
+      "title": "MTTR (TBD)",
+      "type": "text"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "id": 3,
+      "options": {
+        "content": "### SLA breach count\n\nPlaceholder. Query will be `voc_findings_sla_breached` once exporter exists.",
+        "mode": "markdown"
+      },
+      "title": "SLA Breaches (TBD)",
+      "type": "text"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 6 },
+      "id": 4,
+      "options": {
+        "content": "### Top vulnerable assets\n\nPlaceholder. Table panel querying `topk(10, voc_findings_open_by_asset)`.",
+        "mode": "markdown"
+      },
+      "title": "Top Vulnerable Assets (TBD)",
+      "type": "text"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 6 },
+      "id": 5,
+      "options": {
+        "content": "### Scan coverage (% assets scanned in last 7 days)\n\nPlaceholder. Query will be `voc_scan_coverage_ratio * 100`.",
+        "mode": "markdown"
+      },
+      "title": "Scan Coverage (TBD)",
+      "type": "text"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 13 },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "count(kube_pod_info{namespace=\"scanning\"})",
+          "legendFormat": "scanning pods",
+          "refId": "A"
+        }
+      ],
+      "title": "Cluster sanity: pods in scanning ns",
+      "type": "stat"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["voc"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+        "description": null,
+        "error": null,
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus datasource",
+        "multi": false,
+        "name": "DS_PROM",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "VOC Overview",
+  "uid": "voc-overview",
+  "version": 1,
+  "weekStart": ""
+}

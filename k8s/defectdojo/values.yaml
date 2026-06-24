@@ -1,0 +1,53 @@
+# DefectDojo Helm chart: https://github.com/DefectDojo/django-DefectDojo
+#
+# Add the repo:
+#   helm repo add defectdojo https://raw.githubusercontent.com/DefectDojo/django-DefectDojo/helm-charts
+#   helm repo update
+# Inspect the full upstream defaults and copy to docs/ for reference:
+#   helm show values defectdojo/defectdojo > docs/defectdojo-defaults.yaml
+#
+# Install:
+#   helm install defectdojo defectdojo/defectdojo -n voc-core -f k8s/defectdojo/values.yaml
+#
+# This file is a minimal lab override for a single-node k3s cluster. Tune to your host.
+
+tag: latest
+siteUrl: http://localhost:8080
+domain: localhost
+
+ingress:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+# Bundled Postgres + Redis for the lab (not HA, not for production).
+postgresql:
+  enabled: true
+  primary:
+    persistence:
+      size: 10Gi
+      storageClass: local-path
+
+redis:
+  enabled: true
+
+django:
+  replicas: 1
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: 1000m, memory: 1Gi }
+
+celery:
+  broker:
+    replicas: 1
+  beat:
+    replicas: 1
+  worker:
+    replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+initializer:
+  enabled: true

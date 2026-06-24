@@ -1,0 +1,43 @@
+# TheHive 5 Community Edition (free). Requires Cassandra + OpenSearch as deps.
+#
+# Double-check before install:
+#   - You are deploying TheHive Community Edition (free), not Enterprise.
+#   - You are on a supported 5.x release line (pin a concrete tag below).
+#
+# Add the repo (verify official chart location/version):
+#   helm repo add thehive https://thehive-project.github.io/TheHive/
+#   helm repo update
+#   helm show values thehive/thehive > docs/thehive-defaults.yaml
+#
+# Install:
+#   helm install thehive thehive/thehive -n voc-core -f k8s/thehive/values.yaml
+#
+# Cassandra + OpenSearch are heavy; on a RAM-constrained lab host consider
+# running TheHive via the official docker-compose instead of in-cluster.
+
+thehive:
+  image:
+    tag: 5.4.x          # pin to a concrete 5.x release after confirming
+  config:
+    application:
+      secret: "REPLACE_WITH_RANDOM_64_BYTE_STRING"
+      ei:
+        type: local      # local storage for lab; object storage for prod
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: 1000m, memory: 1Gi }
+  ingress:
+    enabled: false
+
+# Bundled dependencies for the lab (disable if you point at external instances).
+cassandra:
+  enabled: true
+  persistence:
+    size: 10Gi
+    storageClass: local-path
+
+opensearch:
+  enabled: true
+  persistence:
+    size: 10Gi
+    storageClass: local-path

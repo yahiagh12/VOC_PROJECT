@@ -1,0 +1,50 @@
+# kube-prometheus-stack: Prometheus + Grafana + Alertmanager + node-exporter
+#
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   helm install kps prometheus-community/kube-prometheus-stack -n monitoring -f k8s/monitoring/values.yaml
+
+defaultRules:
+  create: true
+
+alertmanager:
+  enabled: true
+
+grafana:
+  enabled: true
+  adminPassword: "REPLACE_ME_FIRST_LOGIN"   # change on first login; store outside git
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: local-path
+  ingress:
+    enabled: false
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: voc
+          orgId: 1
+          folder: VOC
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/voc
+  dashboardsConfigMaps:
+    voc: voc-grafana-dashboards
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: 20Gi
+
+prometheus-node-exporter:
+  hostRootFsMount:
+    enabled: true

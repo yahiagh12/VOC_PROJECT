@@ -1,0 +1,46 @@
+# n8n self-hosted Helm chart.
+#
+# Add the repo (verify the official chart location/version):
+#   helm repo add n8n https://charts.n8n.io
+#   helm repo update
+#   helm show values n8n/n8n > docs/n8n-defaults.yaml
+#
+# Install:
+#   helm install n8n n8n/n8n -n voc-core -f k8s/n8n/values.yaml
+#
+# NOTE: chart value keys can vary between releases; confirm against
+# `helm show values` for the version you pull.
+
+image:
+  tag: lts
+
+n8n_encryption_key: "REPLACE_WITH_RANDOM_32_BYTE_STRING"
+
+public_host: "http://localhost:5678"
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: local-path
+
+ingress:
+  enabled: false
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits:   { cpu: 500m, memory: 1Gi }
+
+config:
+  executions: "prune"
+  executionMode: "regular"
+
+# External DB: keep the bundled/internal DB for the lab.
+postgres:
+  enabled: true
+  primary:
+    persistence:
+      size: 5Gi
+      storageClass: local-path
+
+redis:
+  enabled: true

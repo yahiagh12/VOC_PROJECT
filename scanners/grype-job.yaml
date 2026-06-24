@@ -1,0 +1,74 @@
+# Grype scanner — scans a container image for vulnerabilities.
+# Manual run:  kubectl create job manual-grype --from=cronjob/grype -n scanning
+# First run is slow: Grype downloads/syncs its vulnerability DB.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: grype
+  namespace: scanning
+  labels:
+    app: grype
+    voc.project/scanner: "true"
+spec:
+  schedule: "0 2 * * *"            # daily 02:00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          initContainers:
+            - name: grype
+              image: anchore/grype:latest
+              command: ["grype"]
+              args:
+                - "$(TARGET_IMAGE)"
+                - "-o"
+                - "json"
+                - "--file"
+                - "/work/grype.json"
+              env:
+                - name: TARGET_IMAGE
+                  value: "bkimminich/juice-shop:v16.0.0"
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+          containers:
+            - name: upload
+              image: curlimages/curl:8.10.1
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  if [ -z "${DD_URL}" ]; then echo "DD_URL not set; skipping upload"; cat /work/grype.json; exit 0; fi
+                  echo "Uploading Grype JSON to DefectDojo"
+                  curl -sS -X POST "${DD_URL}/api/v2/import-scan/" \
+                    -H "Authorization: Token ${DD_API_KEY}" \
+                    -F "file=@/work/grype.json" \
+                    -F "scan_type=Grype JSON" \
+                    -F "product_name=${DD_PRODUCT_NAME}" \
+                    -F "engagement_name=${DD_ENGAGEMENT_NAME}" \
+                    -F "auto_create_contexts=true"
+              env:
+                - name: DD_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: defectdojo-creds
+                      key: url
+                - name: DD_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: defectdojo-creds
+                      key: api-key
+                - name: DD_PRODUCT_NAME
+                  value: "Lab Targets"
+                - name: DD_ENGAGEMENT_NAME
+                  value: "Grype Daily"
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+          volumes:
+            - name: work
+              emptyDir: {}

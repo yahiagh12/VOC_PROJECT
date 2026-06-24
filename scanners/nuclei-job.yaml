@@ -1,0 +1,75 @@
+# Nuclei scanner — template-based DAST against lab targets.
+# Manual run:  kubectl create job manual-nuclei --from=cronjob/nuclei -n scanning
+# First run is slow: Nuclei downloads/updates templates.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nuclei
+  namespace: scanning
+  labels:
+    app: nuclei
+    voc.project/scanner: "true"
+spec:
+  schedule: "0 3 * * *"            # daily 03:00 (after ZAP)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          initContainers:
+            - name: nuclei
+              image: projectdiscovery/nuclei:latest
+              command: ["nuclei"]
+              args:
+                - "-update-templates"
+                - "-u"
+                - "$(TARGET_URL)"
+                - "-j"
+                - "-o"
+                - "/work/nuclei.jsonl"
+              env:
+                - name: TARGET_URL
+                  value: "http://juice-shop.targets.svc.cluster.local:3000"
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+          containers:
+            - name: upload
+              image: curlimages/curl:8.10.1
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  if [ -z "${DD_URL}" ]; then echo "DD_URL not set; skipping upload"; head -c 500 /work/nuclei.jsonl; exit 0; fi
+                  echo "Uploading Nuclei JSONL to DefectDojo"
+                  curl -sS -X POST "${DD_URL}/api/v2/import-scan/" \
+                    -H "Authorization: Token ${DD_API_KEY}" \
+                    -F "file=@/work/nuclei.jsonl" \
+                    -F "scan_type=Nuclei Scan" \
+                    -F "product_name=${DD_PRODUCT_NAME}" \
+                    -F "engagement_name=${DD_ENGAGEMENT_NAME}" \
+                    -F "auto_create_contexts=true"
+              env:
+                - name: DD_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: defectdojo-creds
+                      key: url
+                - name: DD_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: defectdojo-creds
+                      key: api-key
+                - name: DD_PRODUCT_NAME
+                  value: "Lab Targets"
+                - name: DD_ENGAGEMENT_NAME
+                  value: "Nuclei Daily"
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+          volumes:
+            - name: work
+              emptyDir: {}
