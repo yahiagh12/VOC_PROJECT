@@ -5,26 +5,48 @@
     {
       "parameters": {
         "rule": {
-          "interval": [ { "field": "minutes", "minutesInterval": 5 } ]
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
         }
       },
       "id": "schedule-trigger",
       "name": "Every 5 min",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1,
-      "position": [ -400, 0 ]
+      "position": [
+        -400,
+        0
+      ]
     },
     {
       "parameters": {
-        "url": "={{ $env.DD_URL }}/api/v2/findings/",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "method": "GET",
+        "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/findings/",
+        "authentication": "none",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "active", "value": "true" },
-            { "name": "o", "value": "false" },
-            { "name": "limit", "value": "200" }
+            {
+              "name": "active",
+              "value": "true"
+            },
+            {
+              "name": "limit",
+              "value": "200"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Token b2b0ad8a3176b64213ca700d4b56c3b656f6b51c"
+            }
           ]
         },
         "options": {}
@@ -33,8 +55,10 @@
       "name": "Get DefectDojo Findings",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [ -200, 0 ],
-      "credentials": { "httpHeaderAuth": { "id": "DD_API", "name": "DefectDojo API" } }
+      "position": [
+        -200,
+        0
+      ]
     },
     {
       "parameters": {
@@ -44,18 +68,28 @@
       "name": "Flatten findings",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [ 0, 0 ]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "priority-high",
               "leftValue": "={{ $json.priority }}",
               "rightValue": 60,
-              "operator": { "type": "number", "operation": "gte" }
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
             }
           ],
           "combinator": "and"
@@ -66,12 +100,15 @@
       "name": "Priority >= 60?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [ 200, 0 ]
+      "position": [
+        200,
+        0
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "url": "https://hooks.slack.com/services/REPLACE_ME",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={ \"text\": \"[VOC] Finding #{{ $json.id }} ({{ $json.severity }}) priority={{ $json.priority }}: {{ $json.title }}\" }",
@@ -81,17 +118,28 @@
       "name": "Alert: High/Critical",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [ 460, -120 ]
+      "position": [
+        460,
+        -120
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.THEHIVE_URL }}/api/v1/case",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "url": "http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/case",
+        "authentication": "none",
         "sendHeaders": true,
         "headerParameters": {
-          "parameters": [ { "name": "Content-Type", "value": "application/json" } ]
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer REPLACE_WITH_THEHIVE_API_KEY"
+            }
+          ]
         },
         "sendBody": true,
         "specifyBody": "json",
@@ -102,13 +150,15 @@
       "name": "Create TheHive case",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [ 460, 60 ],
-      "credentials": { "httpHeaderAuth": { "id": "THEHIVE_API", "name": "TheHive API" } }
+      "position": [
+        460,
+        60
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "url": "https://hooks.slack.com/services/REPLACE_ME",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={ \"text\": \"[VOC] Medium finding #{{ $json.id }} priority={{ $json.priority }}: {{ $json.title }}\" }",
@@ -118,21 +168,82 @@
       "name": "Alert: Medium",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [ 460, 220 ]
+      "position": [
+        460,
+        220
+      ]
     }
   ],
   "connections": {
-    "Every 5 min": { "main": [ [ { "node": "Get DefectDojo Findings", "type": "main", "index": 0 } ] ] },
-    "Get DefectDojo Findings": { "main": [ [ { "node": "Flatten findings", "type": "main", "index": 0 } ] ] },
-    "Flatten findings": { "main": [ [ { "node": "Priority >= 60?", "type": "main", "index": 0 } ] ] },
-    "Priority >= 60?": {
+    "Every 5 min": {
       "main": [
-        [ { "node": "Alert: High/Critical", "type": "main", "index": 0 } ],
-        [ { "node": "Alert: Medium", "type": "main", "index": 0 } ]
+        [
+          {
+            "node": "Get DefectDojo Findings",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Alert: High/Critical": { "main": [ [ { "node": "Create TheHive case", "type": "main", "index": 0 } ] ] }
+    "Get DefectDojo Findings": {
+      "main": [
+        [
+          {
+            "node": "Flatten findings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten findings": {
+      "main": [
+        [
+          {
+            "node": "Priority >= 60?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Priority >= 60?": {
+      "main": [
+        [
+          {
+            "node": "Alert: High/Critical",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert: Medium",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert: High/Critical": {
+      "main": [
+        [
+          {
+            "node": "Create TheHive case",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" },
-  "tags": [ { "name": "voc" } ]
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "voc"
+    }
+  ]
 }

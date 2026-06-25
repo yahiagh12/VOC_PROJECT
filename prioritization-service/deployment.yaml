@@ -4,7 +4,7 @@ metadata:
   name: prioritization-config
   namespace: voc-core
 data:
-  DEFECTDOJO_URL: "http://defectdojo-django-svc.voc-core.svc.cluster.local:8080"
+  DEFECTDOJO_URL: "http://defectdojo-django.voc-core.svc.cluster.local"
   DEFECTDOJO_VERIFY_TLS: "false"
   EPSS_API_URL: "https://api.first.org/data/v1/epss"
   CVSS_WEIGHT: "0.5"

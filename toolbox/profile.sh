@@ -56,7 +56,7 @@ voc_deploy() {
       ;;
     scanners)
       kubectl -n scanning create secret generic defectdojo-creds \
-        --from-literal=url=http://defectdojo-django-svc.voc-core.svc.cluster.local:8080 \
+        --from-literal=url=http://defectdojo-django.voc-core.svc.cluster.local \
         --from-literal=api-key="${DD_API_KEY:-changeme}" \
         --dry-run=client -o yaml | kubectl apply -f -
       kubectl apply -f "$REPO_DIR/scanners/"
@@ -107,6 +107,10 @@ voc_deploy() {
 
 voc_scan() {
   bash "$REPO_DIR/scripts/scan-all.sh" "$@"
+}
+
+voc_run_all() {
+  bash "$REPO_DIR/scripts/run-all.sh" "$@"
 }
 
 voc_forward() {
@@ -170,6 +174,7 @@ alias voc-scan="voc_scan"
 alias voc-forward="voc_forward"
 alias voc-logs="voc_logs"
 alias voc-help="voc_help"
+alias voc-run-all="voc_run_all"
 
 # Short aliases
 alias vu="voc_up"

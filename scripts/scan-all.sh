@@ -2,35 +2,29 @@
 set -euo pipefail
 
 # ============================================================
-# VOC - Scan Pipeline
-# Adapted from colleague's scan-all.sh with env-driven config.
-# Runs Grype + Nuclei + ZAP and imports results to DefectDojo.
+# VOC - Scan Pipeline (k8s-native)
+# Runs Grype + Nuclei + ZAP as Kubernetes Jobs and imports
+# results to DefectDojo via the internal cluster API.
 # Designed to run inside the VOC toolbox container.
 # ============================================================
 
-# --- Configuration (override via .env or env vars) ---
-REPO_DIR="${REPO_DIR:-/workspace}"
-SCANNERS_DIR="${SCANNERS_DIR:-$REPO_DIR/scanners}"
-REPORTS_DIR="${REPORTS_DIR:-$SCANNERS_DIR/reports}"
-CONFIG_DIR="${CONFIG_DIR:-$REPO_DIR/config}"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-
+# --- Configuration (from .env or env vars) ---
 DD_API_KEY="${DD_API_KEY:?ERROR: DD_API_KEY is required (set in .env)}"
-DD_URL="${DD_URL:-http://localhost:8080}"
-DD_ENGAGEMENT_ID="${DD_ENGAGEMENT_ID:-}"
+# The toolbox container reaches DefectDojo via port-forward on localhost.
+# k8s Jobs inside the cluster use the internal service name automatically.
+DD_URL="http://localhost:8080"
 DD_PRODUCT_NAME="${DD_PRODUCT_NAME:-Lab Targets}"
 DD_ENGAGEMENT_NAME="${DD_ENGAGEMENT_NAME:-Continuous Scanning}"
-
-DOCKER_NETWORK="${DOCKER_NETWORK:-voc-scan}"
-TARGETS="${TARGETS:-juice-shop:3000 dvwa:80}"
+DD_ENGAGEMENT_ID="${DD_ENGAGEMENT_ID:-}"
 GRYPE_IMAGE="${GRYPE_IMAGE:-alpine:latest}"
-CLEANUP_TARGETS="${CLEANUP_TARGETS:-true}"
+TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+REPORTS_DIR="/workspace/scanners/reports"
 
 # --- Colors ---
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # --- Helper: upload to DefectDojo ---
@@ -40,182 +34,208 @@ dd_import() {
   if [ -n "$DD_ENGAGEMENT_ID" ]; then
     extra_args="-F engagement=$DD_ENGAGEMENT_ID"
   else
-    extra_args="-F product_name=$DD_PRODUCT_NAME -F engagement_name=$DD_ENGAGEMENT_NAME -F auto_create_contexts=true"
+    extra_args="-F product_name=\"$DD_PRODUCT_NAME\" -F engagement_name=\"$DD_ENGAGEMENT_NAME\" -F auto_create_context=true -F product_type_name=Research"
   fi
-  curl -sS -X POST "$DD_URL/api/v2/import-scan/" \
+  local code
+  code=$(curl -sS -X POST "$DD_URL/api/v2/import-scan/" \
     -H "Authorization: Token $DD_API_KEY" \
     -F "scan_type=$scan_type" \
     -F "file=@$file" \
     -F "tags=$tags" \
     $extra_args \
-    -o /dev/null -w "%{http_code}"
+    -o /dev/null -w "%{http_code}" 2>/dev/null) || code="000"
+  echo "$code"
 }
 
 # --- Prep ---
-mkdir -p "$REPORTS_DIR" "$SCANNERS_DIR/zap" "$SCANNERS_DIR/nuclei-templates"
+mkdir -p "$REPORTS_DIR"
 
-# --- Step 0: Check prerequisites ---
-log_info "=== ÉTAPE 0 : Vérification des prérequis ==="
-if ! curl -s -o /dev/null -w "%{http_code}" "$DD_URL" | grep -q "200\|302"; then
-  log_error "DefectDojo inaccessible sur $DD_URL"
-  log_error "Lance un port-forward : kubectl port-forward -n voc-core svc/defectdojo-django-svc 8080:8080"
+# --- Step 0: Check DefectDojo reachability via port-forward ---
+log_info "=== Step 0: Checking DefectDojo API ==="
+DD_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Token $DD_API_KEY" "$DD_URL/api/v2/findings/?limit=1" 2>/dev/null) || DD_HTTP="000"
+if [ "$DD_HTTP" = "200" ]; then
+  log_success "DefectDojo API is reachable and authenticated"
+elif [ "$DD_HTTP" = "403" ]; then
+  log_error "DefectDojo returned 403 Forbidden. Check DD_API_KEY in .env"
+  exit 1
+else
+  log_error "Cannot reach DefectDojo API (HTTP $DD_HTTP). Is port-forward running on 8080?"
+  log_error "Run: voc-forward voc-core/defectdojo-django 8080:80 &"
   exit 1
 fi
-log_success "DefectDojo accessible"
 
-docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 || docker network create "$DOCKER_NETWORK"
+# --- Step 1: Check targets are running ---
+log_info "=== Step 1: Checking scan targets ==="
+JUICE_READY=$(kubectl get pods -n targets -l app=juice-shop --no-headers 2>/dev/null | grep Running | wc -l)
+DVWA_READY=$(kubectl get pods -n targets -l app=dvwa --no-headers 2>/dev/null | grep Running | wc -l)
 
-# --- Step 1: Ensure targets are running ---
-log_info "=== ÉTAPE 1 : Démarrage des cibles ==="
-
-launch_target() {
-  local name="$1" image="$2" port="$3"
-  if docker ps --format '{{.Names}}' | grep -q "^${name}$"; then
-    log_warning "Conteneur $name déjà en cours -> remplacement"
-    docker rm -f "$name" >/dev/null 2>&1 || true
-  fi
-  log_info "Lancement de $name..."
-  docker run -d --name "$name" --network "$DOCKER_NETWORK" -p "${port}:${port}" "$image" >/dev/null
-}
-
-launch_target juice-shop "bkimminich/juice-shop" 3000
-launch_target dvwa "vulnerables/web-dvwa:latest" 8082
-
-sleep 5
-log_success "Cibles opérationnelles sur le réseau '$DOCKER_NETWORK'"
+if [ "$JUICE_READY" -gt 0 ]; then
+  log_success "Juice Shop is running"
+else
+  log_warning "Juice Shop not running. Deploy with: voc-deploy targets"
+fi
+if [ "$DVWA_READY" -gt 0 ]; then
+  log_success "DVWA is running"
+else
+  log_warning "DVWA not running. Deploy with: voc-deploy targets"
+fi
 
 # --- Step 2: Grype (SCA - container image scan) ---
-log_info "=== ÉTAPE 2 : Scan Grype (image: $GRYPE_IMAGE) ==="
+log_info "=== Step 2: Grype scan (image: $GRYPE_IMAGE) ==="
 GRYPE_REPORT="$REPORTS_DIR/grype_$TIMESTAMP.json"
 
-docker run --rm anchore/grype:latest "$GRYPE_IMAGE" -o json > "$GRYPE_REPORT" 2>/dev/null || true
+# Run Grype as a k8s Job
+cat <<EOF | kubectl apply -f - >/dev/null
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: grype-scan-$TIMESTAMP
+  namespace: scanning
+spec:
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: grype
+          image: anchore/grype:latest
+          command: ["grype", "$GRYPE_IMAGE", "-o", "json"]
+EOF
 
-if [ -s "$GRYPE_REPORT" ]; then
-  log_success "Scan Grype terminé"
-  log_info "Import dans DefectDojo..."
-  code=$(dd_import "$GRYPE_REPORT" "Anchore Grype" "container")
-  log_success "Rapport Grype importé (HTTP $code)"
+log_info "Waiting for Grype job to complete (up to 5 min)..."
+if kubectl wait --for=condition=complete job/grype-scan-$TIMESTAMP -n scanning --timeout=300s 2>/dev/null; then
+  GRYPE_POD=$(kubectl get pods -n scanning -l job-name=grype-scan-$TIMESTAMP --no-headers -o name | head -1)
+  kubectl logs -n scanning "$GRYPE_POD" > "$GRYPE_REPORT" 2>/dev/null || true
+  kubectl delete job grype-scan-$TIMESTAMP -n scanning --ignore-not-found >/dev/null 2>&1
+
+  if [ -s "$GRYPE_REPORT" ]; then
+    log_success "Grype scan complete"
+    code=$(dd_import "$GRYPE_REPORT" "Anchore Grype" "container,grype")
+    log_success "Grype report imported to DefectDojo (HTTP $code)"
+  else
+    log_warning "Grype report is empty"
+  fi
 else
-  log_error "Rapport Grype vide ou manquant"
+  log_error "Grype job timed out"
+  kubectl delete job grype-scan-$TIMESTAMP -n scanning --ignore-not-found >/dev/null 2>&1
 fi
 
-# --- Step 3: Nuclei (multi-target DAST) ---
-log_info "=== ÉTAPE 3 : Scan Nuclei (cibles: $TARGETS) ==="
-set +e
+# --- Step 3: Nuclei (DAST - multi target) ---
+log_info "=== Step 3: Nuclei scan ==="
 
-for target in $TARGETS; do
-  name="${target%%:*}"
-  port="${target##*:}"
-  clean="${name}_${port}"
-  NUCLEI_REPORT="$REPORTS_DIR/nuclei_${clean}_$TIMESTAMP.jsonl"
-  NUCLEI_VALID="$REPORTS_DIR/nuclei_${clean}_$TIMESTAMP.json"
+for target_pair in "juice-shop.targets.svc.cluster.local:3000" "dvwa.targets.svc.cluster.local:80"; do
+  target_host="${target_pair%%:*}"
+  target_port="${target_pair##*:}"
+  target_short="${target_host%%.*}"
+  NUCLEI_REPORT="$REPORTS_DIR/nuclei_${target_short}_$TIMESTAMP.json"
+  JOB_NAME="nuclei-${target_short}-$(echo $TIMESTAMP | tr '_' '-')"
 
-  log_info "Nuclei -> http://$target ..."
-  docker run --rm --network "$DOCKER_NETWORK" \
-    -v "$REPORTS_DIR:/output" \
-    projectdiscovery/nuclei:latest \
-    -u "http://$target" -jsonl -o "/output/$(basename "$NUCLEI_REPORT")"
+  log_info "Nuclei -> http://$target_pair ..."
 
-  if [ -s "$NUCLEI_REPORT" ]; then
-    # Convert JSONL to JSON array for DefectDojo parser
-    jq -s '.' "$NUCLEI_REPORT" > "$NUCLEI_VALID" 2>/dev/null || true
-    if [ -s "$NUCLEI_VALID" ]; then
-      code=$(dd_import "$NUCLEI_VALID" "Nuclei Scan" "web")
-      log_success "Rapport Nuclei ($target) importé (HTTP $code)"
+  cat <<EOF | kubectl apply -f - >/dev/null
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: $JOB_NAME
+  namespace: scanning
+spec:
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: nuclei
+          image: projectdiscovery/nuclei:latest
+          command: ["nuclei", "-u", "http://$target_pair", "-jsonl", "-o", "/tmp/results.jsonl"]
+          volumeMounts:
+            - name: results
+              mountPath: /tmp
+      volumes:
+        - name: results
+          emptyDir: {}
+EOF
+
+  log_info "Waiting for Nuclei ($target_short) to complete (up to 10 min)..."
+  if kubectl wait --for=condition=complete job/$JOB_NAME -n scanning --timeout=600s 2>/dev/null; then
+    NUCLEI_POD=$(kubectl get pods -n scanning -l job-name=$JOB_NAME --no-headers -o name | head -1)
+    # Get the JSONL output from stdout and convert to JSON array
+    kubectl logs -n scanning "$NUCLEI_POD" 2>/dev/null | grep '^{' | jq -s '.' > "$NUCLEI_REPORT" 2>/dev/null || true
+    kubectl delete job $JOB_NAME -n scanning --ignore-not-found >/dev/null 2>&1
+
+    if [ -s "$NUCLEI_REPORT" ] && [ "$(cat "$NUCLEI_REPORT")" != "[]" ]; then
+      code=$(dd_import "$NUCLEI_REPORT" "Nuclei Scan" "web,nuclei,$target_short")
+      log_success "Nuclei ($target_short) report imported (HTTP $code)"
+    else
+      log_warning "Nuclei: no findings for $target_short"
     fi
   else
-    log_warning "Nuclei : aucune vulnérabilité pour $target"
+    log_warning "Nuclei ($target_short) job timed out or failed"
+    kubectl delete job $JOB_NAME -n scanning --ignore-not-found >/dev/null 2>&1
   fi
 done
 
-set -e
-
-# --- Step 4: ZAP (deep DAST with AJAX spider) ---
-log_info "=== ÉTAPE 4 : Scan ZAP (DAST avec AJAX) ==="
+# --- Step 4: ZAP (deep DAST) ---
+log_info "=== Step 4: ZAP scan ==="
 ZAP_REPORT="$REPORTS_DIR/zap_$TIMESTAMP.xml"
+ZAP_JOB="zap-scan-$(echo $TIMESTAMP | tr '_' '-')"
 
-ZAP_PLAN="$CONFIG_DIR/zap-plan.yaml"
-if [ ! -f "$ZAP_PLAN" ]; then
-  log_warning "Plan ZAP non trouvé ($ZAP_PLAN). Génération dynamique..."
-  mkdir -p "$CONFIG_DIR"
-  cat > "$ZAP_PLAN" << 'ZAPEOF'
-env:
-  contexts:
-    - name: "juice-shop"
-      urls:
-        - "http://juice-shop:3000"
-    - name: "dvwa"
-      urls:
-        - "http://dvwa:80"
-  parameters:
-    failOnError: false
-jobs:
-  - type: spider
-    parameters:
-      context: juice-shop
-      maxDuration: 3
-  - type: spider
-    parameters:
-      context: dvwa
-      maxDuration: 3
-  - type: passiveScan-wait
-    parameters:
-      maxDuration: 2
-  - type: activeScan
-    parameters:
-      context: juice-shop
-      maxScanDurationInMins: 5
-      policy: Default Policy
-  - type: report
-    parameters:
-      template: traditional-xml
-      reportDir: /zap/wrk
-      reportFile: zap-report-auto.xml
-ZAPEOF
-fi
+cat <<EOF | kubectl apply -f - >/dev/null
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: $ZAP_JOB
+  namespace: scanning
+spec:
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: zap
+          image: zaproxy/zap-stable:latest
+          command:
+            - zap-baseline.py
+            - "-t"
+            - "http://juice-shop.targets.svc.cluster.local:3000"
+            - "-x"
+            - "/tmp/zap-report.xml"
+            - "-I"
+          resources:
+            limits:
+              memory: "3Gi"
+              cpu: "2"
+          volumeMounts:
+            - name: results
+              mountPath: /tmp
+      volumes:
+        - name: results
+          emptyDir: {}
+EOF
 
-log_info "Lancement du moteur ZAP (Automation Framework)..."
-set +e
-docker run --rm -t \
-  -v "$SCANNERS_DIR:/zap/wrk" \
-  -v "$CONFIG_DIR:/zap/config" \
-  --network "$DOCKER_NETWORK" \
-  --memory=3g --cpus=2 \
-  zaproxy/zap-stable zap.sh -cmd \
-  -autorun /zap/config/zap-plan.yaml 2>&1
-set -e
+log_info "Waiting for ZAP to complete (up to 15 min)..."
+if kubectl wait --for=condition=complete job/$ZAP_JOB -n scanning --timeout=900s 2>/dev/null; then
+  ZAP_POD=$(kubectl get pods -n scanning -l job-name=$ZAP_JOB --no-headers -o name | head -1)
+  kubectl cp "scanning/${ZAP_POD#pod/}:/tmp/zap-report.xml" "$ZAP_REPORT" 2>/dev/null || true
+  kubectl delete job $ZAP_JOB -n scanning --ignore-not-found >/dev/null 2>&1
 
-# ZAP may write the report to /zap/wrk/ or /zap/wrk/zap/
-ZAP_FOUND=""
-for path in "$SCANNERS_DIR/zap-report-auto.xml" "$SCANNERS_DIR/zap/zap-report-auto.xml"; do
-  if [ -f "$path" ]; then
-    cp "$path" "$ZAP_REPORT"
-    ZAP_FOUND="$path"
-    break
+  if [ -s "$ZAP_REPORT" ]; then
+    code=$(dd_import "$ZAP_REPORT" "ZAP Scan" "web,zap,juice-shop")
+    log_success "ZAP report imported to DefectDojo (HTTP $code)"
+  else
+    log_warning "ZAP report is empty — trying to get from logs"
+    kubectl delete job $ZAP_JOB -n scanning --ignore-not-found >/dev/null 2>&1
   fi
-done
-
-if [ -n "$ZAP_FOUND" ]; then
-  log_success "Scan ZAP complété : $ZAP_REPORT"
-  code=$(dd_import "$ZAP_REPORT" "ZAP Scan" "web")
-  log_success "Rapport ZAP importé (HTTP $code)"
-  rm -f "$SCANNERS_DIR/zap-report-auto.xml" "$SCANNERS_DIR/zap/zap-report-auto.xml" 2>/dev/null || true
 else
-  log_error "ZAP n'a pas généré de rapport XML"
-fi
-
-# --- Cleanup ---
-if [ "$CLEANUP_TARGETS" = "true" ]; then
-  log_info "Nettoyage des conteneurs cibles..."
-  docker rm -f juice-shop dvwa >/dev/null 2>&1 || true
+  log_warning "ZAP job timed out or failed"
+  kubectl delete job $ZAP_JOB -n scanning --ignore-not-found >/dev/null 2>&1
 fi
 
 # --- Summary ---
 echo ""
 log_info "========================================================"
-log_success "PIPELINE DE SCAN TERMINÉ !"
+log_success "SCAN PIPELINE COMPLETE!"
 log_info "========================================================"
-log_info "Rapports   : $REPORTS_DIR"
-log_info "DefectDojo : $DD_URL"
+log_info "Reports   : $REPORTS_DIR"
+log_info "DefectDojo: $DD_URL (from browser: http://localhost:8080)"
 log_info "========================================================"
-ls -lh "$REPORTS_DIR" | grep "$TIMESTAMP" || true
+ls -lh "$REPORTS_DIR" 2>/dev/null | grep "$TIMESTAMP" || true

@@ -17,6 +17,8 @@ createSecret: true
 createValkeySecret: true
 createPostgresqlSecret: true
 host: localhost
+alternativeHosts:
+  - "*"
 
 ingress:
   enabled: false
