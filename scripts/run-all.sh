@@ -69,6 +69,12 @@ voc_deploy targets
 log_info "Deploying prioritization service..."
 voc_deploy prio 2>/dev/null || log_warning "Prioritization service deploy failed (may need image build)"
 
+# Pre-pull scanner images into k3d so scan jobs don't timeout on download
+log_info "Pre-pulling scanner images into cluster (background)..."
+for img in anchore/grype:latest projectdiscovery/nuclei:latest zaproxy/zap-stable:latest; do
+  docker pull "$img" >/dev/null 2>&1 && k3d image import "$img" -c "${K3D_CLUSTER_NAME:-voc}" >/dev/null 2>&1 &
+done
+
 # ==========================================
 # PHASE 3: WAIT FOR READINESS
 # ==========================================
@@ -122,7 +128,7 @@ kubectl wait --for=condition=Ready pod -n targets --all --timeout=120s 2>/dev/nu
   || log_warning "Some targets not ready"
 
 # ==========================================
-# PHASE 4: GET API KEY
+# PHASE 4: GET API KEY (auto-fetched)
 # ==========================================
 log_section "PHASE 4: Configuration"
 
@@ -130,14 +136,30 @@ log_section "PHASE 4: Configuration"
 DD_PASS=$(kubectl get secret defectdojo -n voc-core -o jsonpath='{.data.DD_ADMIN_PASSWORD}' 2>/dev/null | base64 --decode) || DD_PASS="unknown"
 log_info "DefectDojo admin password: $DD_PASS"
 
-# If DD_API_KEY is still default, try to get a real one
-if [ "$DD_API_KEY" = "changeme" ] || [ -z "$DD_API_KEY" ]; then
-  log_warning "DD_API_KEY not set. You need to:"
+# Auto-fetch the real API key from the running DefectDojo instance
+log_info "Fetching DefectDojo API key from cluster..."
+FETCHED_KEY=""
+for attempt in $(seq 1 5); do
+  FETCHED_KEY=$(kubectl exec deploy/defectdojo-django -n voc-core -c uwsgi -- \
+    python manage.py drf_create_token admin 2>/dev/null | grep -oE '[a-f0-9]{40}' | head -1) || true
+  if [ -n "$FETCHED_KEY" ]; then
+    break
+  fi
+  sleep 3
+done
+
+if [ -n "$FETCHED_KEY" ]; then
+  export DD_API_KEY="$FETCHED_KEY"
+  log_success "API key fetched: ${FETCHED_KEY:0:8}..."
+  # Update the .env file so voc-scan works in future sessions too
+  if grep -q '^DD_API_KEY=' /workspace/.env 2>/dev/null; then
+    sed -i "s|^DD_API_KEY=.*|DD_API_KEY=$FETCHED_KEY|" /workspace/.env
+  fi
+else
+  log_warning "Could not auto-fetch API key. You may need to set DD_API_KEY manually."
   log_warning "  1. Log into DefectDojo at http://localhost:8080"
   log_warning "  2. Go to your user icon -> API v2 Key"
   log_warning "  3. Update DD_API_KEY in /workspace/.env"
-else
-  log_success "DD_API_KEY is configured"
 fi
 
 # ==========================================
@@ -185,14 +207,21 @@ else
   fi
 fi
 
+# Wait for background image pulls to finish
+log_info "Waiting for scanner image pre-pulls to finish..."
+wait 2>/dev/null || true
+log_success "Scanner images ready"
+
 # ==========================================
 # PHASE 6: RUN SCANS
 # ==========================================
 log_section "PHASE 6: Running Vulnerability Scans"
 
-if [ "$DD_API_KEY" != "changeme" ] && [ -n "$DD_API_KEY" ]; then
+if [ -n "${DD_API_KEY:-}" ] && [ "${DD_API_KEY:-}" != "changeme" ]; then
   log_info "Starting scan pipeline..."
-  bash /workspace/scripts/scan-all.sh || log_warning "Some scans may have failed — check output above"
+  # Export the key so scan-all.sh inherits it, and run exactly once
+  export DD_API_KEY
+  bash /workspace/scripts/scan-all.sh 2>&1 || log_warning "Some scans may have failed — check output above"
 else
   log_warning "Skipping scans — DD_API_KEY not configured yet"
   log_warning "After setting the API key in .env, run: voc-scan"

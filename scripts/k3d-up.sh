@@ -45,6 +45,10 @@ sed -i "s|server: https://localhost:${API_PORT}|server: https://${HOST}:${API_PO
 
 export KUBECONFIG="$KUBE_DIR/config"
 
+# Disable TLS verification since we rewrite the hostname (fixes Linux TLS SAN errors)
+kubectl config set-cluster "k3d-$CLUSTER_NAME" --insecure-skip-tls-verify=true 2>/dev/null || true
+sed -i '/certificate-authority-data/d' "$KUBE_DIR/config"
+
 # Wait for the node to be Ready
 echo "[VOC] Waiting for cluster to be ready..."
 kubectl wait --for=condition=Ready node --all --timeout=120s

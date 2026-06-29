@@ -8,86 +8,54 @@ Built for resource-constrained lab environments (≤ 16 GB RAM). Runs on k3d (k3
 
 ## Quick Start Guide
 
-This guide will walk you through setting up the entire Vulnerability Operations Center locally on Windows using Docker Desktop.
+We have completely automated the setup. You just need to run one script and it will handle everything: building the container, deploying the Kubernetes cluster, installing all services, port-forwarding, and running the initial vulnerability scans.
 
 ### 1. Prerequisites
 - **Docker Desktop**: Installed and running.
 - **Git**: To clone this repository.
-- Windows PowerShell (Run as Administrator is recommended but not required).
 
-### 2. Build and Start the Toolbox
-Open PowerShell, navigate to the cloned repository, and start the development container. The `--service-ports` flag is crucial as it exposes the web interfaces (DefectDojo, n8n, etc.) to your Windows host.
+### 2. Run the One-Click Installer
+Open your terminal (PowerShell on Windows, Bash on Linux/Mac) and run the startup script:
 
+**On Windows:**
 ```powershell
-# Navigate to the project directory
-cd path\to\VOC_PROJECT
-
-# Build the toolbox container (takes ~3-5 minutes the first time)
-docker compose build
-
-# Start the toolbox with port forwarding enabled
-docker compose run --service-ports --rm voc
+.\start.ps1
 ```
 
-### 3. Deploy the Kubernetes Cluster
-Once inside the container shell (`root@...:/workspace#`), initialize the local Kubernetes cluster (k3d):
-
+**On Linux/Mac:**
 ```bash
-# Load the helper functions
-source /workspace/toolbox/profile.sh
-
-# Create the cluster and namespaces
-voc-up
+./start.sh
 ```
 
-### 4. Deploy Components
-Deploy the complete stack, including DefectDojo, n8n, Juice Shop (target), scanners, and the custom prioritization service:
+**What the script does automatically:**
+1. Builds the Docker Toolbox container
+2. Spins up a `k3d` Kubernetes cluster
+3. Deploys DefectDojo, n8n, targets (Juice Shop, DVWA), and prioritization services
+4. Waits for all services to be fully healthy (DefectDojo takes ~10-15 mins on first run)
+5. Starts background port-forwards
+6. Runs a full vulnerability scan (Grype, Nuclei, ZAP) and uploads the results
 
-```bash
-# Deploy all services
-voc-deploy all
-
-# Check the status of the deployment
-voc-status
-```
-*Note: Wait until all pods in `voc-status` show a `Running` status. DefectDojo usually takes 3-5 minutes to fully initialize.*
-
-### 5. Access the Web Interfaces
-To access the applications from your Windows browser, you need to port-forward them from the container.
+### 3. Access the Web Interfaces
+Once the script finishes, you will be left inside the toolbox shell (`root@...:/workspace#`). The following services will be available in your host browser:
 
 **DefectDojo (Vulnerability Management)**
-1. Run the port-forward command in your container:
-   ```bash
-   voc-forward voc-core/defectdojo-django 8080:80 &
-   ```
-   *(The `&` runs it in the background so you can keep using the shell)*
-2. Open your browser: **http://localhost:8080**
-3. Retrieve the admin password:
-   ```bash
-   echo $(kubectl get secret defectdojo -n voc-core -o jsonpath='{.data.DD_ADMIN_PASSWORD}' | base64 --decode)
-   ```
-   *(Username is `admin`)*
+- **URL**: http://localhost:8080
+- **User**: `admin`
+- **Password**: Shown in the terminal output at the end of the script
 
 **n8n (Workflow Automation)**
-1. Port-forward the service:
-   ```bash
-   voc-forward voc-core/n8n 5678:5678 &
-   ```
-2. Open your browser: **http://localhost:5678**
+- **URL**: http://localhost:5678
 
 **Juice Shop (Vulnerable Target App)**
-1. Port-forward the service:
-   ```bash
-   voc-forward targets/juice-shop 3000:3000 &
-   ```
-2. Open your browser: **http://localhost:3000**
+- **URL**: http://localhost:3000
 
-### 6. Run a Vulnerability Scan
-Trigger a scan pipeline (Grype + Nuclei + ZAP) against the targets. The results will be automatically pushed into DefectDojo.
-
+### 4. Running Additional Scans
+If you ever want to re-run the vulnerability scanners against the targets, just type this inside the toolbox shell:
 ```bash
 voc-scan
 ```
+
+If your port-forwards ever drop (or if you restart your computer tomorrow), just run `.\start.ps1` again. It will detect the cluster already exists and instantly reconnect everything!
 
 ---
 
