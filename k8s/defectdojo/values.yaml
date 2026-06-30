@@ -67,18 +67,31 @@ celery:
     replicas: 1
   worker:
     replicas: 1
+    resources:
+      limits:
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
 
 django:
   replicas: 1
-  resources:
-    limits:
-      memory: 512Mi
-    requests:
-      cpu: 250m
-      memory: 256Mi
   uwsgi:
     processes: 2
     threads: 2
+    resources:
+      limits:
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+  nginx:
+    resources:
+      limits:
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 128Mi
 
 initializer:
   enabled: true

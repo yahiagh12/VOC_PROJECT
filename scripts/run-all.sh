@@ -69,11 +69,7 @@ voc_deploy targets
 log_info "Deploying prioritization service..."
 voc_deploy prio 2>/dev/null || log_warning "Prioritization service deploy failed (may need image build)"
 
-# Pre-pull scanner images into k3d so scan jobs don't timeout on download
-log_info "Pre-pulling scanner images into cluster (background)..."
-for img in anchore/grype:latest projectdiscovery/nuclei:latest zaproxy/zap-stable:latest; do
-  docker pull "$img" >/dev/null 2>&1 && k3d image import "$img" -c "${K3D_CLUSTER_NAME:-voc}" >/dev/null 2>&1 &
-done
+
 
 # ==========================================
 # PHASE 3: WAIT FOR READINESS
@@ -207,10 +203,7 @@ else
   fi
 fi
 
-# Wait for background image pulls to finish
-log_info "Waiting for scanner image pre-pulls to finish..."
-wait 2>/dev/null || true
-log_success "Scanner images ready"
+
 
 # ==========================================
 # PHASE 6: RUN SCANS
