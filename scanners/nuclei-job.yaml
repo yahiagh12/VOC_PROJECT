@@ -5,35 +5,43 @@
 # IMPORTANT: DefectDojo's Nuclei parser expects a JSON ARRAY, but Nuclei
 # outputs JSONL (one JSON object per line). A conversion init container
 # using jq is included below (adapted from colleague's scan-all.sh fix).
+# Nuclei scanner — template-based DAST against lab targets with integrated crawler.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: nuclei
   namespace: scanning
-  labels:
-    app: nuclei
-    voc.project/scanner: "true"
 spec:
-  schedule: "0 3 * * *"            # daily 03:00 (after ZAP)
+  schedule: "0 3 * * *"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       template:
         spec:
           restartPolicy: OnFailure
           initContainers:
+            - name: crawler
+              image: nenadzaric/gospider:a4244c8
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  gospider -s "$(TARGET_URL)" --sitemap --robots --depth 1 --js=false -q | sort -u > /work/urls_clean.txt
+                  echo "Pipeline: $(wc -l < /work/urls_clean.txt) URLs extraites."
+              env:
+                - name: TARGET_URL
+                  value: "http://juice-shop.targets.svc.cluster.local:3000"
+              volumeMounts:
+                - name: work
+                  mountPath: /work
             - name: nuclei
               image: projectdiscovery/nuclei:latest
-              command: ["nuclei"]
+              command: ["/bin/sh", "-c"]
               args:
-                - "-update-templates"
-                - "-u"
-                - "$(TARGET_URL)"
-                - "-jsonl"
-                - "-o"
-                - "/work/nuclei.jsonl"
+                - | 
+                  echo "--- LANCEMENT DU SCAN ---" 
+                  nuclei -update-templates 
+                  nuclei -l /work/urls_clean.txt -severity info,low,medium,high,critical -jsonl -o /work/nuclei.jsonl -debug -vv
+                  echo "--- SCAN TERMINÉ ---"
               env:
                 - name: TARGET_URL
                   value: "http://juice-shop.targets.svc.cluster.local:3000"
@@ -45,14 +53,11 @@ spec:
               command: ["/bin/sh", "-c"]
               args:
                 - |
-                  set -e
-                  apk add --no-cache jq >/dev/null 2>&1
+                  apk add --no-cache jq
                   if [ -s /work/nuclei.jsonl ]; then
                     jq -s '.' /work/nuclei.jsonl > /work/nuclei.json
-                    echo "Converted JSONL to JSON array: $(wc -l < /work/nuclei.jsonl) findings"
                   else
                     echo "[]" > /work/nuclei.json
-                    echo "No Nuclei findings to convert"
                   fi
               volumeMounts:
                 - name: work
@@ -63,34 +68,19 @@ spec:
               command: ["/bin/sh", "-c"]
               args:
                 - |
-                  set -e
-                  if [ -z "${DD_URL}" ]; then echo "DD_URL not set; skipping upload"; head -c 500 /work/nuclei.json; exit 0; fi
-                  if [ ! -s /work/nuclei.json ] || [ "$(cat /work/nuclei.json)" = "[]" ]; then
-                    echo "No findings to upload"; exit 0
+                  if [ -s /work/nuclei.json ] && [ "$(cat /work/nuclei.json)" != "[]" ]; then
+                    curl -sS -X POST "${DD_URL}/api/v2/import-scan/" \
+                      -H "Authorization: Token ${DD_API_KEY}" \
+                      -F "file=@/work/nuclei.json" \
+                      -F "scan_type=Nuclei Scan" \
+                      -F "product_name=Lab Targets" \
+                      -F "engagement_name=Nuclei Daily"
                   fi
-                  echo "Uploading Nuclei JSON to DefectDojo"
-                  curl -sS -X POST "${DD_URL}/api/v2/import-scan/" \
-                    -H "Authorization: Token ${DD_API_KEY}" \
-                    -F "file=@/work/nuclei.json" \
-                    -F "scan_type=Nuclei Scan" \
-                    -F "product_name=${DD_PRODUCT_NAME}" \
-                    -F "engagement_name=${DD_ENGAGEMENT_NAME}" \
-                    -F "auto_create_contexts=true"
               env:
                 - name: DD_URL
-                  valueFrom:
-                    secretKeyRef:
-                      name: defectdojo-creds
-                      key: url
+                  valueFrom: { secretKeyRef: { name: defectdojo-creds, key: url } }
                 - name: DD_API_KEY
-                  valueFrom:
-                    secretKeyRef:
-                      name: defectdojo-creds
-                      key: api-key
-                - name: DD_PRODUCT_NAME
-                  value: "Lab Targets"
-                - name: DD_ENGAGEMENT_NAME
-                  value: "Nuclei Daily"
+                  valueFrom: { secretKeyRef: { name: defectdojo-creds, key: api-key } }
               volumeMounts:
                 - name: work
                   mountPath: /work

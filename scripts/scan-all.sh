@@ -223,28 +223,25 @@ extract_nuclei_results() {
 # Templates are baked into the projectdiscovery/nuclei image and
 # cached on the k3d node after first pull — NO re-download.
 # ============================================================
+# --- Step 2: Nuclei DAST scan (Parallel) ---
 log_info "=== Step 3: Nuclei DAST scan ==="
-
-# Launch both Nuclei jobs simultaneously so they run in parallel
 NUCLEI_TARGETS=("juice-shop.targets.svc.cluster.local:3000" "dvwa.targets.svc.cluster.local:80")
 NUCLEI_JOB_NAMES=()
 NUCLEI_TARGET_SHORTS=()
 
 for target_pair in "${NUCLEI_TARGETS[@]}"; do
-  target_short="${target_pair%%.*}"
-  JOB_NAME="nuclei-${target_short}-${TIMESTAMP}"
-  NUCLEI_JOB_NAMES+=("$JOB_NAME")
-  NUCLEI_TARGET_SHORTS+=("$target_short")
+    target_short="${target_pair%%.*}"
+    JOB_NAME="nuclei-${target_short}-${TIMESTAMP}"
+    TARGET_URL="http://$target_pair"
 
-  log_info "Nuclei -> http://$target_pair (launching)"
-  kubectl delete job "$JOB_NAME" -n scanning --ignore-not-found >/dev/null 2>&1 || true
+    NUCLEI_JOB_NAMES+=("$JOB_NAME")
+    NUCLEI_TARGET_SHORTS+=("$target_short")
 
-  # Key changes vs previous version:
-  #   -severity includes "info"  — catches tech detection, header leaks, etc.
-  #   -fr (follow redirects)     — critical for SPAs like Juice Shop
-  #   -timeout 10                — longer timeout for slow responses
-  #   Removed template update code (templates are baked into image)
-  cat <<'JOBEOF' | sed "s|__TARGET__|http://$target_pair|g; s|__JOB_NAME__|$JOB_NAME|g" | kubectl apply -f - >/dev/null
+    kubectl delete job "$JOB_NAME" -n scanning --ignore-not-found >/dev/null 2>&1
+
+    sed -e "s|__JOB_NAME__|$JOB_NAME|g" \
+        -e "s|__TARGET__|$TARGET_URL|g" \
+        <<'JOBEOF' | kubectl apply -f -
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -252,34 +249,35 @@ metadata:
   namespace: scanning
 spec:
   ttlSecondsAfterFinished: 300
-  backoffLimit: 0
-  activeDeadlineSeconds: 600
   template:
     spec:
       restartPolicy: Never
+      volumes:
+        - name: work
+          emptyDir: {}
+      initContainers:
+        - name: crawler
+          image: nenadzaric/gospider:a4244c8
+          command: ["/bin/sh", "-c"]
+          args:
+            - gospider -s "__TARGET__" --sitemap --robots --depth 1 --js=false -q | sort -u > /work/urls_clean.txt
+          volumeMounts:
+            - name: work
+              mountPath: /work
       containers:
         - name: nuclei
           image: projectdiscovery/nuclei:latest
           command: ["/bin/sh", "-c"]
           args:
             - |
-              echo "[nuclei] === Starting scan against __TARGET__ ==="
-              echo "[nuclei] Templates: $(find /root/nuclei-templates -name '*.yaml' 2>/dev/null | wc -l) files"
-              nuclei -u "__TARGET__" \
-                -severity info,low,medium,high,critical \
-                -timeout 10 \
-                -bulk-size 25 \
-                -rate-limit 150 \
-                -fr \
-                -duc -ni \
-                -jsonl \
-                -stats -si 30 \
-                -o /tmp/results.jsonl 2>&1 || true
-              echo "[nuclei] Scan complete. Results: $(wc -l < /tmp/results.jsonl 2>/dev/null || echo 0) lines"
+              nuclei -update-templates
+              nuclei -l /work/urls_clean.txt -severity info,low,medium,high,critical -jsonl -o /work/nuclei.jsonl
               echo "===NUCLEI_RESULTS_START==="
-              cat /tmp/results.jsonl 2>/dev/null || true
-              echo ""
+              cat /work/nuclei.jsonl
               echo "===NUCLEI_RESULTS_END==="
+          volumeMounts:
+            - name: work
+              mountPath: /work
           resources:
             limits:
               memory: "2048Mi"
@@ -287,19 +285,24 @@ spec:
 JOBEOF
 done
 
-log_info "Both Nuclei jobs launched — waiting for completion (up to 10 min)..."
-
-# Wait for each job (both run in parallel on the k8s node)
+# --- Waiting and Extracting ---
 for i in "${!NUCLEI_JOB_NAMES[@]}"; do
-  JOB_NAME="${NUCLEI_JOB_NAMES[$i]}"
-  target_short="${NUCLEI_TARGET_SHORTS[$i]}"
-  log_info "Waiting for Nuclei ($target_short)..."
-  if wait_for_job "$JOB_NAME" scanning 600 "Nuclei ($target_short)"; then
-    extract_nuclei_results "$JOB_NAME" "$target_short"
-  else
-    log_warning "Nuclei ($target_short) failed — see diagnostics above"
-    kubectl delete job "$JOB_NAME" -n scanning --ignore-not-found >/dev/null 2>&1 || true
-  fi
+    JOB_NAME="${NUCLEI_JOB_NAMES[$i]}"
+    target_short="${NUCLEI_TARGET_SHORTS[$i]}"
+    
+    log_info "Attente de la fin du job: $JOB_NAME"
+    kubectl wait --for=condition=complete "job/$JOB_NAME" -n scanning --timeout=600s >/dev/null
+    
+    # Extraction
+    nuclei_report="$REPORTS_DIR/nuclei_${target_short}_$TIMESTAMP.json"
+    pod_name=$(kubectl get pods -n scanning -l "job-name=$JOB_NAME" --no-headers -o name | head -1)
+    
+    kubectl logs -n scanning "$pod_name" -c nuclei | sed -n '/===NUCLEI_RESULTS_START===/,/===NUCLEI_RESULTS_END===/{ /===NUCLEI_RESULTS/d; p; }' | jq -s '.' > "$nuclei_report"
+    
+    if [ -s "$nuclei_report" ] && [ "$(cat "$nuclei_report")" != "[]" ]; then
+        dd_import "$nuclei_report" "Nuclei Scan" "web,nuclei,$target_short"
+    fi
+    kubectl delete job "$JOB_NAME" -n scanning
 done
 
 # (ZAP scan removed due to high memory consumption on k3d node)
