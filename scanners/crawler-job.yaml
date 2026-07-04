@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: crawler-scan
+  namespace: scanning
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: katana
+        image: projectdiscovery/katana:latest
+        command: ["/bin/sh", "-c"]
+        # On écrit directement dans le volume monté
+        args: [
+          "katana -u http://juice-shop.targets.svc.cluster.local:3000 -jc -d 2 -o /data/crawler-results.txt"
+        ]
+        volumeMounts:
+        - name: report-storage
+          mountPath: /data
+      volumes:
+      - name: report-storage
+        hostPath:
+          path: /home/yaya/VOC_PROJECT/scanners/reports
+          type: Directory

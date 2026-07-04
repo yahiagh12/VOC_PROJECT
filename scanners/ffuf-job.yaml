@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ffuf-scan
+  namespace: scanning
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: ffuf
+        image: parrotsec/ffuf:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c"]
+        # On utilise le chemin absolu ou l'appel direct, car il est dans le PATH
+        args: [
+          "echo 'admin\nlogin\ndashboard\napi\nconfig' > /tmp/words.txt && \
+           ffuf -u http://juice-shop.targets.svc.cluster.local:3000/FUZZ -w /tmp/words.txt -of json -o /tmp/ffuf.json"
+        ]

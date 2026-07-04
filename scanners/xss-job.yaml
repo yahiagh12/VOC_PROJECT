@@ -1,0 +1,17 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: xss-scan
+  namespace: scanning
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: xsstrike
+        image: femtopixel/xsstrike:3.1.6
+        command: ["/bin/sh", "-c"]
+        # On exécute, on affiche à l'écran (tee) et on sauvegarde
+        args: [
+          "python3 xsstrike.py -u 'http://juice-shop.targets.svc.cluster.local:3000/#/search?q=test' --json | tee /tmp/xss.json"
+        ]

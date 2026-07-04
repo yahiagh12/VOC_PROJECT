@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sqlmap-scan
+  namespace: scanning
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: sqlmap
+        image: parrotsec/sqlmap:latest
+        imagePullPolicy: IfNotPresent
+        # On définit le répertoire de travail explicitement
+        workingDir: /usr/share/sqlmap
+        command: ["python3", "sqlmap.py"]
+        args: [
+          "-u", "http://juice-shop.targets.svc.cluster.local:3000/rest/products/search?q=1",
+          "--batch",
+          "--technique=B",        # Force uniquement l'injection Booléenne (la plus stable)
+          "--level=3",
+          "--risk=2",
+          "--flush-session"
+        ]
