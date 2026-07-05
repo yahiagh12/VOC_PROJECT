@@ -1,0 +1,55 @@
+# Discovery job — Phase 1 of the VOC pipeline.
+#
+# Runs gospider once against __TARGET_URL__ and re-emits discovered URLs
+# between ===DISCOVERY_RESULTS_START=== / ===_END=== markers so scan-all.sh
+# can harvest them via `kubectl logs`, then:
+#   - persist them locally for forensics
+#   - split into all_urls.txt and param_urls.txt
+#   - push them into a ConfigMap (scripts/scan-all.sh) that the Phase 2
+#     scanners (sqlmap / xss / nuclei) mount at /targets, so every Phase 2
+#     scanner sees the SAME URL inventory rather than each tool re-crawling
+#     with its own init container.
+#
+# Placeholder substituted by scripts/scan-all.sh:
+#   __JOB_NAME__     : unique job name per target+run
+#   __TARGET_URL__   : http://<svc>.<ns>.svc.cluster.local:<port>
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: scanning
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: work
+          emptyDir: {}
+      containers:
+        - name: gospider
+          image: nenadzaric/gospider:a4244c8
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # gospider stdout prints one record per discovered link, usually
+              # in the form "URL | method | source" (pipe-delimited) or
+              # "URL -- method -- source" depending on build. We extract
+              # just the leading http(s):// token so downstream tools get
+              # a clean URL list regardless of gospider's exact format.
+              gospider -s "__TARGET_URL__" --sitemap --robots --depth 2 --js=false -q \
+                2>/dev/null \
+                | grep -oE 'https?://[^[:space:]|]+' \
+                | sort -u > /work/urls.txt || true
+              echo "===DISCOVERY_RESULTS_START==="
+              cat /work/urls.txt 2>/dev/null || true
+              echo "===DISCOVERY_RESULTS_END==="
+          volumeMounts:
+            - name: work
+              mountPath: /work
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "1"

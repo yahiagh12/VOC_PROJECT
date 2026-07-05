@@ -1,0 +1,21 @@
+# Hand-curated seed list of parameter-bearing endpoints for juice-shop that
+# gospider's static crawl can't discover (they're SPA-reachable via JS, or
+# are REST routes exposed only through the JSON API). Appended to
+# param_urls.txt in scan-all.sh when the crawl itself returned zero
+# parameter-bearing URLs, so sqlmap/xsstrike always have something to
+# attack instead of exiting with "no parameter-bearing URLs".
+#
+# One URL per line, blank lines / # comments allowed.
+
+# REST search endpoint -- the colleague's original hardcoded target.
+# Known to reflect the q parameter (XSS) and be boolean-blind SQLi
+# injectable.
+http://juice-shop.targets.svc.cluster.local:3000/rest/products/search?q=test
+
+# REST products list -- accepts ?order= to inject into ORDER BY clauses.
+http://juice-shop.targets.svc.cluster.local:3000/rest/products?order=
+
+# User login route -- accepts email/password params in the body; listed
+# here as a GET seed even though it's POST in prod so sqlmap can detect
+# the endpoint at all (it'll try GET fallback).
+http://juice-shop.targets.svc.cluster.local:3000/rest/user/login

@@ -105,11 +105,26 @@ voc_deploy() {
   esac
 }
 
+# Source .env before running any voc-* command that needs DD_API_KEY or
+# other config. Without this, the user must run `set -a; . /workspace/.env;
+# set +a` manually every time they open a new shell or edit .env -- a
+# common foot-gun (a stale DD_API_KEY=changeme left in the env returns
+# HTTP 403 with no clue why).
+_voc_load_env() {
+  local env_file="$REPO_DIR/.env"
+  if [ -f "$env_file" ]; then
+    # shellcheck disable=SC1090
+    set -a; . "$env_file"; set +a
+  fi
+}
+
 voc_scan() {
+  _voc_load_env
   bash "$REPO_DIR/scripts/scan-all.sh" "$@"
 }
 
 voc_run_all() {
+  _voc_load_env
   bash "$REPO_DIR/scripts/run-all.sh" "$@"
 }
 

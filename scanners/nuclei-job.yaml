@@ -1,11 +1,11 @@
-# Nuclei scanner — template-based DAST against lab targets.
+# Nuclei scanner ??? template-based DAST against lab targets.
 # Manual run:  kubectl create job manual-nuclei --from=cronjob/nuclei -n scanning
 # First run is slow: Nuclei downloads/updates templates.
 #
 # IMPORTANT: DefectDojo's Nuclei parser expects a JSON ARRAY, but Nuclei
 # outputs JSONL (one JSON object per line). A conversion init container
 # using jq is included below (adapted from colleague's scan-all.sh fix).
-# Nuclei scanner — template-based DAST against lab targets with integrated crawler.
+# Nuclei scanner ??? template-based DAST against lab targets with integrated crawler.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -34,14 +34,14 @@ spec:
                 - name: work
                   mountPath: /work
             - name: nuclei
-              image: projectdiscovery/nuclei:latest
+              image: projectdiscovery/nuclei:v3.10.0
               command: ["/bin/sh", "-c"]
               args:
                 - | 
                   echo "--- LANCEMENT DU SCAN ---" 
                   nuclei -update-templates 
                   nuclei -l /work/urls_clean.txt -severity info,low,medium,high,critical -jsonl -o /work/nuclei.jsonl -debug -vv
-                  echo "--- SCAN TERMINÉ ---"
+                  echo "--- SCAN TERMIN?? ---"
               env:
                 - name: TARGET_URL
                   value: "http://juice-shop.targets.svc.cluster.local:3000"

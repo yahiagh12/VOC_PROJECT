@@ -1,24 +1,63 @@
+# SQLMap scanner ??? Phase 2 exploitation.
+#
+# Uses sqlmap's native multi-target mode (`-m`) so it can scan every
+# parameter-bearing URL the Phase 1 discovery job found, not just one
+# hardcoded endpoint. The URL list comes from a ConfigMap created by
+# scripts/scan-all.sh at run time (key `param_urls.txt`) and is mounted
+# at /targets. Empty file -> sqlmap exits cleanly with no findings.
+#
+# Placeholders substituted by scripts/scan-all.sh:
+#   __JOB_NAME__    : unique per target+run
+#   __TARGETS_CM__  : Name of the ConfigMap created by Phase 1
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sqlmap-scan
+  name: __JOB_NAME__
   namespace: scanning
 spec:
+  ttlSecondsAfterFinished: 300
   template:
     spec:
       restartPolicy: Never
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: targets
+          configMap:
+            name: __TARGETS_CM__
       containers:
-      - name: sqlmap
-        image: parrotsec/sqlmap:latest
-        imagePullPolicy: IfNotPresent
-        # On définit le répertoire de travail explicitement
-        workingDir: /usr/share/sqlmap
-        command: ["python3", "sqlmap.py"]
-        args: [
-          "-u", "http://juice-shop.targets.svc.cluster.local:3000/rest/products/search?q=1",
-          "--batch",
-          "--technique=B",        # Force uniquement l'injection Booléenne (la plus stable)
-          "--level=3",
-          "--risk=2",
-          "--flush-session"
-        ]
+        - name: sqlmap
+          image: parrotsec/sqlmap:7.1
+          imagePullPolicy: IfNotPresent
+          workingDir: /usr/share/sqlmap
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              if [ ! -s /targets/param_urls.txt ]; then
+                echo "===SQLMAP_RESULTS_START==="
+                echo "(no parameter-bearing URLs to scan)"
+                echo "===SQLMAP_RESULTS_END==="
+                exit 0
+              fi
+              python3 sqlmap.py \
+                -m /targets/param_urls.txt \
+                --batch \
+                --technique=B \
+                --level=3 \
+                --risk=2 \
+                --flush-session \
+                --output-dir=/work/sqlmap-out > /work/sqlmap.log 2>&1 || true
+              echo "===SQLMAP_RESULTS_START==="
+              cat /work/sqlmap.log
+              echo "===SQLMAP_RESULTS_END==="
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: targets
+              mountPath: /targets
+              readOnly: true
+          resources:
+            limits:
+              memory: "1024Mi"
+              cpu: "1"

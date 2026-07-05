@@ -1,19 +1,56 @@
+# ffuf scanner -- content/path discovery (Phase 2).
+#
+# ffuf doesn't need the Phase 1 URL inventory (it discovers paths), so
+# it takes only the target base URL via __TARGET_URL__. Output is JSON to
+# /work/ffuf.json, re-emitted between ===FFUF_RESULTS_START=== /
+# ===_END=== markers so scripts/scan-all.sh can pull it via kubectl logs
+# and normalize via scripts/normalize-findings.py.
+#
+# Placeholders substituted by scripts/scan-all.sh:
+#   __JOB_NAME__    : unique per target+run
+#   __TARGET_URL__  : http://<svc>.<ns>.svc.cluster.local:<port>
+#
+# Tunables:
+#   words list      trivial default -- swap /work/words.txt for a real
+#                   wordlist (SecLists etc.) for meaningful discovery.
+# The match/filter (-mc/-fc) decisions are left to the normalizer so the
+# filter rules live in ONE place (scripts/normalize-findings.py).
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: ffuf-scan
+  name: __JOB_NAME__
   namespace: scanning
 spec:
+  ttlSecondsAfterFinished: 300
   template:
     spec:
       restartPolicy: Never
+      volumes:
+        - name: work
+          emptyDir: {}
       containers:
-      - name: ffuf
-        image: parrotsec/ffuf:latest
-        imagePullPolicy: IfNotPresent
-        command: ["/bin/sh", "-c"]
-        # On utilise le chemin absolu ou l'appel direct, car il est dans le PATH
-        args: [
-          "echo 'admin\nlogin\ndashboard\napi\nconfig' > /tmp/words.txt && \
-           ffuf -u http://juice-shop.targets.svc.cluster.local:3000/FUZZ -w /tmp/words.txt -of json -o /tmp/ffuf.json"
-        ]
+        - name: ffuf
+          image: parrotsec/ffuf:7.1
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              printf 'admin\nlogin\ndashboard\napi\nconfig\nrest\nftp\nmetrics\nsearch\nuser\n' > /work/words.txt
+              ffuf -u "__TARGET_URL__/FUZZ" \
+                   -w /work/words.txt \
+                   -of json -o /work/ffuf.json > /work/ffuf.log 2>&1 || true
+              echo "===FFUF_RESULTS_START==="
+              cat /work/ffuf.json 2>/dev/null || echo '{"results":[]}'
+              # ffuf writes JSON with no trailing newline -- add one so the
+              # END marker below lands on its own line, otherwise the sed
+              # range in scripts/scan-all.sh deletes the JSON line too.
+              echo ""
+              echo "===FFUF_RESULTS_END==="
+          volumeMounts:
+            - name: work
+              mountPath: /work
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "1"

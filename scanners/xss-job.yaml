@@ -1,17 +1,76 @@
+# XSStrike scanner -- Phase 2 exploitation.
+#
+# CRITICAL FIX (Phase 0): the colleague's template used `--json`, which in
+# XSStrike means "the POST data is JSON" NOT "produce JSON output" (see
+# `python3 xsstrike.py --help`). XSStrike has NO structured-output mode --
+# it prints colored text to stdout/stderr. So:
+#   - we drop --json,
+#   - we run xsstrike per parameter-bearing URL discovered in Phase 1
+#     (only one URL per invocation -- that's how xsstrike works),
+#   - we capture stdout+stderr as text into /work/xss.txt
+#   - we emit the raw text (with ANSI stripped) between
+#     ===XSS_RESULTS_START=== / ===_END=== markers,
+#   - scripts/normalize-findings.py then parses the text looking for
+#     "[!] Testing parameter: X" and "[+] Payload: <p>" / "Efficiency: N"
+#     / "Confidence: N" lines.
+#
+# `--skip --skip-dom` flags: skip the interactive "continue?" prompt and
+# skip DOM-XSS scanning (juice-shop is a JSON API -- DOM checks waste time
+# and produce false positives from JSON's reflected strings).
+#
+# Placeholders substituted by scripts/scan-all.sh:
+#   __JOB_NAME__    : unique per target+run
+#   __TARGETS_CM__  : Name of the ConfigMap created by Phase 1
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: xss-scan
+  name: __JOB_NAME__
   namespace: scanning
 spec:
+  ttlSecondsAfterFinished: 300
   template:
     spec:
       restartPolicy: Never
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: targets
+          configMap:
+            name: __TARGETS_CM__
       containers:
-      - name: xsstrike
-        image: femtopixel/xsstrike:3.1.6
-        command: ["/bin/sh", "-c"]
-        # On exécute, on affiche à l'écran (tee) et on sauvegarde
-        args: [
-          "python3 xsstrike.py -u 'http://juice-shop.targets.svc.cluster.local:3000/#/search?q=test' --json | tee /tmp/xss.json"
-        ]
+        - name: xsstrike
+          image: femtopixel/xsstrike:3.1.6
+          imagePullPolicy: IfNotPresent
+          workingDir: /XSStrike
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              : > /work/xss.txt
+              if [ -s /targets/param_urls.txt ]; then
+                while IFS= read -r u; do
+                  [ -z "$u" ] && continue
+                  # Run in unbuffered mode (-u) so re-direct captures all
+                  # output. --skip skips the interactive "continue?" prompt;
+                  # --skip-dom skips DOM-XSS detection (irrelevant for JSON
+                  # REST APIs).
+                  python3 -u xsstrike.py -u "$u" --skip --skip-dom \
+                    >> /work/xss.txt 2>&1 || true
+                  echo "----" >> /work/xss.txt
+                done < /targets/param_urls.txt
+              fi
+              # Strip ANSI escape codes before emitting so the normalizer's
+              # regexes can match cleanly. sed strips `\x1b[...m` sequences.
+              echo "===XSS_RESULTS_START==="
+              sed 's/\x1b\[[0-9;]*m//g' /work/xss.txt 2>/dev/null || true
+              echo "===XSS_RESULTS_END==="
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: targets
+              mountPath: /targets
+              readOnly: true
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "1"

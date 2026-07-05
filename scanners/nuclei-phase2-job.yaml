@@ -1,0 +1,57 @@
+# Nuclei Phase 2 scanner -- template-based DAST against URLs harvested
+# by Phase 1 (Step 2) discovery.
+#
+# Phase 1 already produced a per-target ConfigMap (key `all_urls.txt`)
+# that we mount at /targets. nuclei reads it via `-l`. We dropped the
+# per-job gospider init container that the original CronJob (nuclei-job.yaml)
+# uses, because discovery now happens centrally in Step 2 so the same
+# URL inventory feeds nuclei + sqlmap + xss consistently.
+#
+# Placeholders substituted by scripts/scan-all.sh:
+#   __JOB_NAME__     : unique per target+run
+#   __TARGETS_CM__   : name of the per-target ConfigMap from Phase 1
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: scanning
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: targets
+          configMap:
+            name: __TARGETS_CM__
+      containers:
+        - name: nuclei
+          image: projectdiscovery/nuclei:v3.10.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              nuclei -update-templates >/dev/null 2>&1 || true
+              if [ -s /targets/all_urls.txt ]; then
+                nuclei -l /targets/all_urls.txt \
+                      -severity info,low,medium,high,critical \
+                      -jsonl -o /work/nuclei.jsonl
+              else
+                : > /work/nuclei.jsonl
+              fi
+              echo "===NUCLEI_RESULTS_START==="
+              cat /work/nuclei.jsonl 2>/dev/null || true
+              echo "===NUCLEI_RESULTS_END==="
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: targets
+              mountPath: /targets
+              readOnly: true
+          resources:
+            limits:
+              memory: "2048Mi"
+              cpu: "1"

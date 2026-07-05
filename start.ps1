@@ -22,7 +22,11 @@ Write-Host "[VOC] Starting toolbox and deploying everything..." -ForegroundColor
 Write-Host "[VOC] This will take 5-10 minutes on first run." -ForegroundColor Yellow
 Write-Host ""
 
-docker compose run --service-ports --rm voc bash -c "
+# PowerShell keeps CRLF in the here-string (this file is CRLF per
+# .gitattributes), but bash inside the container chokes on the \r that
+# ends up inside the multi-line `bash -c` argument. Strip \r before
+# passing the script to docker so bash sees clean LF line endings.
+$bashScript = @"
   source /workspace/toolbox/profile.sh
   bash /workspace/scripts/run-all.sh
   echo ''
@@ -34,4 +38,7 @@ docker compose run --service-ports --rm voc bash -c "
   echo '=============================================='
   echo ''
   exec bash --init-file /workspace/toolbox/profile.sh
-"
+"@
+$bashScript = $bashScript -replace "`r`n", "`n"
+
+docker compose run --service-ports --rm voc bash -c $bashScript

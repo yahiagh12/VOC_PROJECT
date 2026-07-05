@@ -1,25 +1,43 @@
+# Crawler (katana) ??? URL discovery for feeding other scanners.
+#
+# Original used a hostPath bound to /home/yaya/VOC_PROJECT/... which only
+# works on one developer's laptop. This version writes to an emptyDir at
+# /work and re-emits the discovered URLs between ===CRAWLER_RESULTS_START===
+# / ===_END=== markers so scan-all.sh can harvest them via `kubectl logs`.
+#
+# The discovered URL list is meant to be fed *into* the nuclei / sqlmap /
+# xss scans later ??? for now the inline Nuclei job in scan-all.sh uses its
+# own gospider crawl; this katana job is a standalone alternative.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: crawler-scan
+  name: __JOB_NAME__
   namespace: scanning
 spec:
+  ttlSecondsAfterFinished: 300
   template:
     spec:
       restartPolicy: Never
-      containers:
-      - name: katana
-        image: projectdiscovery/katana:latest
-        command: ["/bin/sh", "-c"]
-        # On écrit directement dans le volume monté
-        args: [
-          "katana -u http://juice-shop.targets.svc.cluster.local:3000 -jc -d 2 -o /data/crawler-results.txt"
-        ]
-        volumeMounts:
-        - name: report-storage
-          mountPath: /data
       volumes:
-      - name: report-storage
-        hostPath:
-          path: /home/yaya/VOC_PROJECT/scanners/reports
-          type: Directory
+        - name: work
+          emptyDir: {}
+      containers:
+        - name: katana
+          image: projectdiscovery/katana:v1.6.1
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              katana -u "http://juice-shop.targets.svc.cluster.local:3000" \
+                     -jc -d 2 -o /work/crawler-results.txt > /work/katana.log 2>&1 || true
+              echo "===CRAWLER_RESULTS_START==="
+              cat /work/crawler-results.txt 2>/dev/null || true
+              echo "===CRAWLER_RESULTS_END==="
+          volumeMounts:
+            - name: work
+              mountPath: /work
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "1"
