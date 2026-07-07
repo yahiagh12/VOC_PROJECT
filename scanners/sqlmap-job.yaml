@@ -43,10 +43,13 @@ spec:
               python3 sqlmap.py \
                 -m /targets/param_urls.txt \
                 --batch \
-                --technique=B \
-                --level=3 \
-                --risk=2 \
+                --cookie="__COOKIE__" \
+                --technique=BEUST \
+                --level=2 \
+                --risk=1 \
+                --retries=3 \
                 --flush-session \
+                --answers="skip=N" \
                 --output-dir=/work/sqlmap-out > /work/sqlmap.log 2>&1 || true
               echo "===SQLMAP_RESULTS_START==="
               cat /work/sqlmap.log

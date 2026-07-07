@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="ignore")
 
-    defectdojo_url: str = "http://defectdojo-django-svc.voc-core.svc.cluster.local:8080"
+    defectdojo_url: str = "http://defectdojo-django.voc-core.svc.cluster.local"
     defectdojo_api_key: str = "changeme"
     defectdojo_verify_tls: bool = True
 

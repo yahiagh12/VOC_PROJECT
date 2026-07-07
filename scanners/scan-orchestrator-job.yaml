@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scan-orchestrator
+  namespace: scanning
+spec:
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: scan-orchestrator
+      restartPolicy: Never
+      containers:
+        - name: orchestrator
+          image: voc-orchestrator:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DD_URL
+              valueFrom:
+                secretKeyRef:
+                  name: defectdojo-creds
+                  key: url
+            - name: DD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: defectdojo-creds
+                  key: api-key
+            - name: QUICK_MODE
+              value: "0"

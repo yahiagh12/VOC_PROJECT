@@ -103,6 +103,8 @@ scanners/zap/
 scanners/nuclei-templates/
 # dynamically generated ZAP plan (keep config/zap-plan.yaml checked in)
 config/zap-plan-auto.yaml
+# toolbox image build cache (start.ps1 optimization)
+.toolbox-build-hash
 
 # ---- Misc ----
 *.log

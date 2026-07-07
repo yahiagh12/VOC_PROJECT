@@ -1,74 +1,40 @@
-# Grype scanner ??? scans a container image for vulnerabilities (SCA).
-# Manual run:  kubectl create job manual-grype --from=cronjob/grype -n scanning
-# First run is slow: Grype downloads/syncs its vulnerability DB.
+# Grype scanner — scans a container image for vulnerabilities (SCA).
+# Placeholder substituted by scripts/scan-all.sh:
+#   __JOB_NAME__     : unique per target+run
+#   __TARGET_IMAGE__ : the docker image to scan
 apiVersion: batch/v1
-kind: CronJob
+kind: Job
 metadata:
-  name: grype
+  name: __JOB_NAME__
   namespace: scanning
   labels:
     app: grype
     voc.project/scanner: "true"
 spec:
-  schedule: "0 2 * * *"            # daily 02:00
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
-  jobTemplate:
+  ttlSecondsAfterFinished: 300
+  template:
     spec:
-      template:
-        spec:
-          restartPolicy: OnFailure
-          initContainers:
-            - name: grype
-              image: anchore/grype:v0.115.0
-              command: ["grype"]
-              args:
-                - "$(TARGET_IMAGE)"
-                - "-o"
-                - "json"
-                - "--file"
-                - "/work/grype.json"
-              env:
-                - name: TARGET_IMAGE
-                  value: "bkimminich/juice-shop:v16.0.0"
-              volumeMounts:
-                - name: work
-                  mountPath: /work
-          containers:
-            - name: upload
-              image: curlimages/curl:8.10.1
-              command: ["/bin/sh", "-c"]
-              args:
-                - |
-                  set -e
-                  if [ -z "${DD_URL}" ]; then echo "DD_URL not set; skipping upload"; cat /work/grype.json; exit 0; fi
-                  echo "Uploading Grype JSON to DefectDojo"
-                  curl -sS -X POST "${DD_URL}/api/v2/import-scan/" \
-                    -H "Authorization: Token ${DD_API_KEY}" \
-                    -F "file=@/work/grype.json" \
-                    -F "scan_type=Anchore Grype" \
-                    -F "product_name=${DD_PRODUCT_NAME}" \
-                    -F "engagement_name=${DD_ENGAGEMENT_NAME}" \
-                    -F "auto_create_contexts=true"
-              env:
-                - name: DD_URL
-                  valueFrom:
-                    secretKeyRef:
-                      name: defectdojo-creds
-                      key: url
-                - name: DD_API_KEY
-                  valueFrom:
-                    secretKeyRef:
-                      name: defectdojo-creds
-                      key: api-key
-                - name: DD_PRODUCT_NAME
-                  value: "Lab Targets"
-                - name: DD_ENGAGEMENT_NAME
-                  value: "Grype Daily"
-              volumeMounts:
-                - name: work
-                  mountPath: /work
-          volumes:
+      restartPolicy: Never
+      containers:
+        - name: grype
+          image: anchore/grype:v0.115.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              echo "Scanning image: __TARGET_IMAGE__"
+              grype "__TARGET_IMAGE__" -o json > /work/grype.json
+              echo "===GRYPE_RESULTS_START==="
+              cat /work/grype.json 2>/dev/null || true
+              echo "===GRYPE_RESULTS_END==="
+          volumeMounts:
             - name: work
-              emptyDir: {}
+              mountPath: /work
+          resources:
+            limits:
+              memory: "1024Mi"
+              cpu: "1"
+      volumes:
+        - name: work
+          emptyDir: {}

@@ -69,6 +69,11 @@ voc_deploy targets
 log_info "Deploying prioritization service..."
 voc_deploy prio 2>/dev/null || log_warning "Prioritization service deploy failed (may need image build)"
 
+# Pre-pull scanner images in background (overlaps with Phase 3 readiness waits).
+# This eliminates the 1-2 min cold-start penalty on the first voc-scan.
+log_info "Pre-pulling scanner images (background)..."
+voc_prepull &
+PREPULL_PID=$!
 
 
 # ==========================================
@@ -170,34 +175,27 @@ if [ "$DD_READY" -eq 0 ]; then
 else
   # Kill any existing port-forwards
   pkill -f "kubectl port-forward" 2>/dev/null || true
-  sleep 2
+  sleep 1
 
-  log_info "Starting DefectDojo port-forward (8080 -> 80)..."
+  # Launch all port-forwards simultaneously
+  log_info "Starting port-forwards (DefectDojo:8080, n8n:5678, Juice Shop:3000)..."
   kubectl port-forward --address 0.0.0.0 -n voc-core svc/defectdojo-django 8080:80 >/dev/null 2>&1 &
-  sleep 3
-
-  log_info "Starting n8n port-forward (5678 -> 5678)..."
   kubectl port-forward --address 0.0.0.0 -n voc-core svc/n8n 5678:5678 >/dev/null 2>&1 &
-  sleep 2
-
-  log_info "Starting Juice Shop port-forward (3000 -> 3000)..."
   kubectl port-forward --address 0.0.0.0 -n targets svc/juice-shop 3000:3000 >/dev/null 2>&1 &
-  sleep 2
+  sleep 3  # single wait for all three to bind
 
-  # Verify DefectDojo port-forward is working
+  # Verify DefectDojo port-forward is working (tight loop: 5 attempts, 1s)
   log_info "Verifying DefectDojo is reachable on localhost:8080..."
   PF_OK=0
-  for i in $(seq 1 15); do
+  for i in $(seq 1 5); do
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/" 2>/dev/null) || HTTP_CODE="000"
     if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
       PF_OK=1
       log_success "DefectDojo is reachable at http://localhost:8080"
       break
     fi
-    sleep 2
-    printf "."
+    sleep 1
   done
-  echo ""
   if [ "$PF_OK" -eq 0 ]; then
     log_warning "Port-forward not responding yet. Try: voc-scan"
   fi
@@ -209,6 +207,12 @@ fi
 # PHASE 6: RUN SCANS
 # ==========================================
 log_section "PHASE 6: Running Vulnerability Scans"
+
+# Ensure pre-pull finished before scanning
+if [ -n "${PREPULL_PID:-}" ]; then
+  wait "$PREPULL_PID" 2>/dev/null || true
+  log_success "Scanner images pre-pulled"
+fi
 
 if [ -n "${DD_API_KEY:-}" ] && [ "${DD_API_KEY:-}" != "changeme" ]; then
   log_info "Starting scan pipeline..."

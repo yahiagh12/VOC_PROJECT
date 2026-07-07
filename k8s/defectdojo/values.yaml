@@ -34,7 +34,7 @@ postgresql:
     password: CHANGE_ME_DOJO_PG
   primary:
     persistence:
-      enabled: false
+      enabled: true
       size: 10Gi
       storageClass: local-path
     resources:

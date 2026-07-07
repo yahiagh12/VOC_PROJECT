@@ -1,4 +1,4 @@
-# VOC - One Click Start
+﻿# VOC - One Click Start
 # Double-click this file or run it in PowerShell to start everything.
 # It builds the container, enters it, deploys all services, and drops you into a shell.
 
@@ -8,9 +8,18 @@ Write-Host "  VOC - Starting Everything...          " -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Build the toolbox image
-Write-Host "[VOC] Building toolbox image..." -ForegroundColor Yellow
-docker compose build
+# Only rebuild if toolbox files changed (saves ~30s on restarts)
+$toolboxFiles = @(".\toolbox\Dockerfile", ".\toolbox\entrypoint.sh", ".\toolbox\profile.sh")
+$hash = ($toolboxFiles | ForEach-Object { (Get-FileHash $_).Hash }) -join ""
+$cacheFile = ".\.toolbox-build-hash"
+$cached = if (Test-Path $cacheFile) { Get-Content $cacheFile -Raw } else { "" }
+if ($hash -ne $cached.Trim()) {
+    Write-Host "[VOC] Toolbox files changed — rebuilding image..." -ForegroundColor Yellow
+    docker compose build
+    $hash | Set-Content $cacheFile -NoNewline
+} else {
+    Write-Host "[VOC] Toolbox image up to date (skipping build)" -ForegroundColor Green
+}
 
 # Clean up any leftover containers that might hold ports
 Write-Host "[VOC] Cleaning up old containers..." -ForegroundColor Yellow

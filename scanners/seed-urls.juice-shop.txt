@@ -1,0 +1,63 @@
+# Seed URLs for Juice Shop — endpoints that gospider can't discover
+# because Juice Shop is an Angular SPA (routes rendered client-side)
+# and REST API endpoints are only accessible via JavaScript.
+#
+# These are merged into all_urls.txt in scan-all.sh after gospider
+# runs, so nuclei and other scanners can test them.
+#
+# One URL per line, blank lines / # comments allowed.
+
+# Main SPA routes (Angular)
+http://juice-shop.targets.svc.cluster.local:3000/
+http://juice-shop.targets.svc.cluster.local:3000/#/login
+http://juice-shop.targets.svc.cluster.local:3000/#/register
+http://juice-shop.targets.svc.cluster.local:3000/#/search
+http://juice-shop.targets.svc.cluster.local:3000/#/basket
+http://juice-shop.targets.svc.cluster.local:3000/#/contact
+http://juice-shop.targets.svc.cluster.local:3000/#/about
+http://juice-shop.targets.svc.cluster.local:3000/#/recycle
+http://juice-shop.targets.svc.cluster.local:3000/#/complain
+http://juice-shop.targets.svc.cluster.local:3000/#/chatbot
+http://juice-shop.targets.svc.cluster.local:3000/#/score-board
+http://juice-shop.targets.svc.cluster.local:3000/#/privacy-security/privacy-policy
+http://juice-shop.targets.svc.cluster.local:3000/#/administration
+
+# REST API endpoints
+http://juice-shop.targets.svc.cluster.local:3000/rest/products/search?q=test
+http://juice-shop.targets.svc.cluster.local:3000/rest/products
+http://juice-shop.targets.svc.cluster.local:3000/rest/user/login
+http://juice-shop.targets.svc.cluster.local:3000/rest/user/whoami
+http://juice-shop.targets.svc.cluster.local:3000/rest/user/change-password
+http://juice-shop.targets.svc.cluster.local:3000/rest/basket/0
+http://juice-shop.targets.svc.cluster.local:3000/rest/saveLoginIp
+http://juice-shop.targets.svc.cluster.local:3000/rest/deluxe-membership
+http://juice-shop.targets.svc.cluster.local:3000/rest/memories
+http://juice-shop.targets.svc.cluster.local:3000/rest/chatbot/status
+http://juice-shop.targets.svc.cluster.local:3000/rest/repeat-notification
+
+# Express API endpoints
+http://juice-shop.targets.svc.cluster.local:3000/api/Products
+http://juice-shop.targets.svc.cluster.local:3000/api/Products/1
+http://juice-shop.targets.svc.cluster.local:3000/api/Feedbacks
+http://juice-shop.targets.svc.cluster.local:3000/api/Users
+http://juice-shop.targets.svc.cluster.local:3000/api/Challenges
+http://juice-shop.targets.svc.cluster.local:3000/api/Complaints
+http://juice-shop.targets.svc.cluster.local:3000/api/Recycles
+http://juice-shop.targets.svc.cluster.local:3000/api/SecurityQuestions
+http://juice-shop.targets.svc.cluster.local:3000/api/Quantitys
+
+# Static / info disclosure
+http://juice-shop.targets.svc.cluster.local:3000/ftp
+http://juice-shop.targets.svc.cluster.local:3000/ftp/acquisitions.md
+http://juice-shop.targets.svc.cluster.local:3000/ftp/legal.md
+http://juice-shop.targets.svc.cluster.local:3000/ftp/eastere.gg
+http://juice-shop.targets.svc.cluster.local:3000/encryptionkeys
+http://juice-shop.targets.svc.cluster.local:3000/robots.txt
+http://juice-shop.targets.svc.cluster.local:3000/security.txt
+http://juice-shop.targets.svc.cluster.local:3000/metrics
+http://juice-shop.targets.svc.cluster.local:3000/snippets
+http://juice-shop.targets.svc.cluster.local:3000/redirect?to=https://owasp.org
+http://juice-shop.targets.svc.cluster.local:3000/promotion
+http://juice-shop.targets.svc.cluster.local:3000/video
+http://juice-shop.targets.svc.cluster.local:3000/assets/public/images/padding/1px.png
+http://juice-shop.targets.svc.cluster.local:3000/b2b/v2/orders

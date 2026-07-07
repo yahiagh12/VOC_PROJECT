@@ -1,0 +1,39 @@
+# Seed URLs for DVWA — endpoints that gospider can't discover because
+# they're behind the login page. These are merged into all_urls.txt
+# in scan-all.sh after gospider runs, so nuclei and other scanners
+# can test them (with auth cookies if available).
+#
+# One URL per line, blank lines / # comments allowed.
+
+# Login page (already discovered by gospider, but included for completeness)
+http://dvwa.targets.svc.cluster.local:80/login.php
+
+# Main pages (require auth)
+http://dvwa.targets.svc.cluster.local:80/index.php
+http://dvwa.targets.svc.cluster.local:80/setup.php
+http://dvwa.targets.svc.cluster.local:80/security.php
+http://dvwa.targets.svc.cluster.local:80/phpinfo.php
+http://dvwa.targets.svc.cluster.local:80/about.php
+http://dvwa.targets.svc.cluster.local:80/instructions.php
+
+# Vulnerability modules (each has its own endpoint)
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/brute/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/exec/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/csrf/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/fi/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/sqli/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/sqli_blind/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/upload/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/xss_r/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/xss_s/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/xss_d/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/weak_id/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/captcha/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/csp/
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/javascript/
+
+# Static assets / info disclosure
+http://dvwa.targets.svc.cluster.local:80/robots.txt
+http://dvwa.targets.svc.cluster.local:80/.htaccess
+http://dvwa.targets.svc.cluster.local:80/config/
+http://dvwa.targets.svc.cluster.local:80/docs/

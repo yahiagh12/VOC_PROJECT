@@ -28,6 +28,9 @@ spec:
       volumes:
         - name: work
           emptyDir: {}
+        - name: wordlist
+          configMap:
+            name: ffuf-wordlist
       containers:
         - name: ffuf
           image: parrotsec/ffuf:7.1
@@ -36,9 +39,9 @@ spec:
           args:
             - |
               set -e
-              printf 'admin\nlogin\ndashboard\napi\nconfig\nrest\nftp\nmetrics\nsearch\nuser\n' > /work/words.txt
               ffuf -u "__TARGET_URL__/FUZZ" \
-                   -w /work/words.txt \
+                   -w /wordlist/wordlist.txt \
+                   -mc 200,301,302,403 \
                    -of json -o /work/ffuf.json > /work/ffuf.log 2>&1 || true
               echo "===FFUF_RESULTS_START==="
               cat /work/ffuf.json 2>/dev/null || echo '{"results":[]}'
@@ -50,6 +53,9 @@ spec:
           volumeMounts:
             - name: work
               mountPath: /work
+            - name: wordlist
+              mountPath: /wordlist
+              readOnly: true
           resources:
             limits:
               memory: "512Mi"

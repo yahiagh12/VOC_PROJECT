@@ -1,18 +1,21 @@
 # Setup guide
 
-Get from an empty Windows PC to a running VOC stack on a k3d cluster, all
-inside the VOC dev toolbox container. No WSL2, no admin scripts — just Docker
-Desktop + this repo.
+Get from an empty machine (Windows, macOS, or Linux) to a running VOC stack
+on a k3d cluster, all inside the VOC dev toolbox container. No WSL2, no admin
+scripts — just Docker Desktop + this repo.
 
 ---
 
-## 0. Prerequisites (Windows host)
+## 0. Prerequisites
 
-- **Docker Desktop** with WSL2 backend — install from docker.com if missing.
-  Ensure it's running: `docker --version` in PowerShell.
-- **Git** (Scoop: `scoop install git`, or install from git-scm.com).
-- **kubectl** on Windows (optional, for accessing the cluster from outside
-  the toolbox): `scoop install kubectl`.
+- **Docker Desktop** — install from docker.com if missing. Ensure it's running:
+  `docker --version` in your terminal.
+  - Windows: uses WSL2 backend.
+  - macOS: works on both Intel and Apple Silicon.
+- **Git** — install from git-scm.com (or `brew install git` on macOS,
+  `scoop install git` on Windows).
+- **kubectl** (optional, for accessing the cluster from outside the toolbox):
+  `brew install kubectl` (macOS) or `scoop install kubectl` (Windows).
 
 That's it. Everything else (helm, k3d, jq, yq, python, scanner CLIs) lives
 inside the toolbox container.
@@ -21,8 +24,8 @@ inside the toolbox container.
 
 ## 1. Build the toolbox image
 
-```powershell
-cd C:\Users\Regal\Desktop\voc
+```bash
+cd <path-to-voc-repo>
 docker compose build
 ```
 
@@ -68,9 +71,13 @@ Verify:
 voc-status
 ```
 
-From Windows host (outside toolbox), you can also use kubectl directly:
+From the host (outside toolbox), you can also use kubectl directly:
 ```powershell
-$env:KUBECONFIG = "C:\Users\Regal\Desktop\voc\.kube\config"
+# Windows PowerShell:
+$env:KUBECONFIG = "$(Get-Location)\.kube\config"
+# macOS / Linux:
+export KUBECONFIG="$(pwd)/.kube/config"
+
 kubectl get nodes
 ```
 

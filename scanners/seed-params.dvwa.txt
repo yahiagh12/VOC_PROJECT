@@ -1,0 +1,30 @@
+# Hand-curated seed list of parameter-bearing endpoints for DVWA.
+# These require authentication (PHPSESSID + security=low cookies).
+# Appended to param_urls.txt so sqlmap/xsstrike have injectable
+# targets for DVWA's vulnerability modules.
+#
+# One URL per line, blank lines / # comments allowed.
+
+# SQL Injection (GET)
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/sqli/?id=1&Submit=Submit
+
+# SQL Injection (Blind)
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/sqli_blind/?id=1&Submit=Submit
+
+# Reflected XSS
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/xss_r/?name=test
+
+# Stored XSS (POST target -- sqlmap will try GET fallback)
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/xss_s/?txtName=test&mtxMessage=test&btnSign=Sign+Guestbook
+
+# Command Injection
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/exec/?ip=127.0.0.1&Submit=Submit
+
+# File Inclusion
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/fi/?page=include.php
+
+# Brute Force (login form)
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/brute/?username=admin&password=test&Login=Login
+
+# CSRF
+http://dvwa.targets.svc.cluster.local:80/vulnerabilities/csrf/?password_new=test&password_conf=test&Change=Change

@@ -34,10 +34,19 @@ spec:
           args:
             - |
               set -e
-              nuclei -update-templates >/dev/null 2>&1 || true
+              # Web-relevant tags only (~1K templates instead of 10K+).
+              # Excludes dos/fuzz/intrusive/brute-force which are slow,
+              # noisy, or inappropriate for automated lab scanning.
+              # We don't need to update templates because they are baked into the image.
               if [ -s /targets/all_urls.txt ]; then
                 nuclei -l /targets/all_urls.txt \
-                      -severity info,low,medium,high,critical \
+                      -severity low,medium,high,critical \
+                      -tags cve,misconfig,exposure,tech,xss,sqli,lfi,rfi,rce,ssrf,redirect,auth-bypass,default-login \
+                      -etags dos,fuzz,intrusive,brute-force \
+                      -timeout 10 \
+                      -bulk-size 50 \
+                      -rate-limit 300 \
+                      -H "Cookie: __COOKIE__" \
                       -jsonl -o /work/nuclei.jsonl
               else
                 : > /work/nuclei.jsonl

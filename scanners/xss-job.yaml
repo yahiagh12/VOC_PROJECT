@@ -54,7 +54,7 @@ spec:
                   # output. --skip skips the interactive "continue?" prompt;
                   # --skip-dom skips DOM-XSS detection (irrelevant for JSON
                   # REST APIs).
-                  python3 -u xsstrike.py -u "$u" --skip --skip-dom \
+                  python3 -u xsstrike.py -u "$u" --skip --skip-dom --headers "Cookie: __COOKIE__" \
                     >> /work/xss.txt 2>&1 || true
                   echo "----" >> /work/xss.txt
                 done < /targets/param_urls.txt

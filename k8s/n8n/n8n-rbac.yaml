@@ -1,0 +1,38 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: n8n-orchestrator-trigger
+  namespace: scanning
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: n8n-orchestrator-trigger-binding
+  namespace: scanning
+subjects:
+  - kind: ServiceAccount
+    name: n8n
+    namespace: voc-core
+roleRef:
+  kind: Role
+  name: n8n-orchestrator-trigger
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: n8n-token
+  namespace: voc-core
+  annotations:
+    kubernetes.io/service-account.name: n8n
+type: kubernetes.io/service-account-token

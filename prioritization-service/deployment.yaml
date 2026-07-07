@@ -19,9 +19,14 @@ kind: Secret
 metadata:
   name: prioritization-secrets
   namespace: voc-core
+  annotations:
+    voc.project/note: "Auto-populated by voc-deploy prio or run-all.sh"
 type: Opaque
 stringData:
-  DEFECTDOJO_API_KEY: "REPLACE_WITH_REAL_DD_API_KEY"
+  # This gets overwritten by the deploy script with the real DD API key.
+  # If you see 403s from the prioritization service, re-run:
+  #   voc-deploy prio
+  DEFECTDOJO_API_KEY: "changeme"
 ---
 apiVersion: apps/v1
 kind: Deployment

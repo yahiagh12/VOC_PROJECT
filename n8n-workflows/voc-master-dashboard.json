@@ -1,0 +1,754 @@
+{
+  "name": "VOC Master Dashboard",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "sched-nightly",
+      "name": "Nightly Scan (02:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-600, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voc/scan/full",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-scan-full",
+      "name": "Webhook: Start Full Scan",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-600, 240],
+      "webhookId": "voc-scan-full"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voc/scan/quick",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-scan-quick",
+      "name": "Webhook: Start Quick Scan",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-600, 480],
+      "webhookId": "voc-scan-quick"
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "voc/dashboard",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-dashboard",
+      "name": "Webhook: Dashboard",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-600, 720],
+      "webhookId": "voc-dashboard"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "sched-health",
+      "name": "Health Check (5 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-600, 960]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "sched-findings",
+      "name": "Poll Findings (5 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-600, 1440]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Set scan mode based on trigger\nlet quickMode = '0';\nlet triggerSource = 'schedule';\n\nif ($input.first()?.json?.headers) {\n  // Came from a webhook\n  triggerSource = 'webhook';\n}\n\n// Check which webhook triggered this\nconst nodeName = $input.first()?.json?.$node?.name || '';\nif (nodeName.includes('Quick') || $('Webhook: Start Quick Scan')?.isExecuted) {\n  quickMode = '1';\n}\n\nreturn [{ json: { quickMode, triggerSource, startedAt: new Date().toISOString() } }];"
+      },
+      "id": "set-scan-mode",
+      "name": "Set Scan Mode",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { quickMode: '1', triggerSource: 'webhook-quick', startedAt: new Date().toISOString() } }];"
+      },
+      "id": "set-quick-mode",
+      "name": "Set Quick Mode",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 480]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://kubernetes.default.svc/apis/batch/v1/namespaces/scanning/jobs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{'Bearer ' + $env.K8S_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"apiVersion\": \"batch/v1\",\n  \"kind\": \"Job\",\n  \"metadata\": {\n    \"generateName\": \"scan-orchestrator-\",\n    \"namespace\": \"scanning\",\n    \"labels\": {\n      \"app\": \"voc-orchestrator\",\n      \"voc.project/triggered-by\": \"n8n\"\n    }\n  },\n  \"spec\": {\n    \"ttlSecondsAfterFinished\": 600,\n    \"backoffLimit\": 1,\n    \"template\": {\n      \"spec\": {\n        \"serviceAccountName\": \"scan-orchestrator\",\n        \"restartPolicy\": \"Never\",\n        \"containers\": [\n          {\n            \"name\": \"orchestrator\",\n            \"image\": \"voc-orchestrator:latest\",\n            \"imagePullPolicy\": \"IfNotPresent\",\n            \"env\": [\n              {\n                \"name\": \"DD_URL\",\n                \"valueFrom\": {\n                  \"secretKeyRef\": {\n                    \"name\": \"defectdojo-creds\",\n                    \"key\": \"url\"\n                  }\n                }\n              },\n              {\n                \"name\": \"DD_API_KEY\",\n                \"valueFrom\": {\n                  \"secretKeyRef\": {\n                    \"name\": \"defectdojo-creds\",\n                    \"key\": \"api-key\"\n                  }\n                }\n              },\n              {\n                \"name\": \"QUICK_MODE\",\n                \"value\": \"\" + $json.quickMode\n              }\n            ]\n          }\n        ]\n      }\n    }\n  }\n} }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 30000
+        }
+      },
+      "id": "create-scan-job",
+      "name": "Create Scan Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-60, 360],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract the job name from the K8s API response\nconst jobName = $input.first().json?.metadata?.name || 'unknown';\nconst namespace = 'scanning';\nconst startedAt = new Date().toISOString();\nconst quickMode = $('Set Scan Mode')?.first()?.json?.quickMode || $('Set Quick Mode')?.first()?.json?.quickMode || '0';\n\nreturn [{\n  json: {\n    jobName,\n    namespace,\n    startedAt,\n    quickMode,\n    status: 'Running',\n    pollCount: 0,\n    maxPolls: 120\n  }\n}];"
+      },
+      "id": "extract-job-name",
+      "name": "Extract Job Name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://kubernetes.default.svc/apis/batch/v1/namespaces/scanning/jobs/{{ $json.jobName }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{'Bearer ' + $env.K8S_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 10000
+        }
+      },
+      "id": "poll-job-status",
+      "name": "Poll Job Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $input.first().json;\nconst conditions = job?.status?.conditions || [];\nconst prevData = $('Extract Job Name').first()?.json || $('Wait 15s').first()?.json || {};\n\nlet status = 'Running';\nlet done = false;\n\nfor (const c of conditions) {\n  if (c.type === 'Complete' && c.status === 'True') {\n    status = 'Complete';\n    done = true;\n    break;\n  }\n  if (c.type === 'Failed' && c.status === 'True') {\n    status = 'Failed';\n    done = true;\n    break;\n  }\n}\n\nconst pollCount = (prevData.pollCount || 0) + 1;\nif (pollCount >= (prevData.maxPolls || 120)) {\n  status = 'Timeout';\n  done = true;\n}\n\nreturn [{\n  json: {\n    jobName: prevData.jobName || job?.metadata?.name,\n    namespace: prevData.namespace || 'scanning',\n    startedAt: prevData.startedAt,\n    quickMode: prevData.quickMode,\n    status,\n    done,\n    pollCount,\n    maxPolls: prevData.maxPolls || 120,\n    completedAt: done ? new Date().toISOString() : null,\n    active: job?.status?.active || 0,\n    succeeded: job?.status?.succeeded || 0,\n    failed: job?.status?.failed || 0\n  }\n}];"
+      },
+      "id": "check-job-status",
+      "name": "Check Job Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "job-done",
+              "leftValue": "={{ $json.done }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-job-done",
+      "name": "Job Done?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "wait-15s",
+      "name": "Wait 15s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [900, 540]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "job-success",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "Complete",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-job-success",
+      "name": "Scan Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1140, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/findings/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "active", "value": "true" },
+            { "name": "limit", "value": "500" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "dd-get-findings-post-scan",
+      "name": "Get Post-Scan Findings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1380, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const findings = $input.first().json?.results || [];\nconst jobData = $('Check Job Status').first()?.json || {};\n\n// Severity breakdown\nconst byServerity = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };\nconst byScanner = {};\nconst recentFindings = [];\nconst now = new Date();\nconst oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);\n\nfor (const f of findings) {\n  const sev = f.severity || 'Info';\n  byServerity[sev] = (byServerity[sev] || 0) + 1;\n\n  // Extract scanner from tags\n  const tags = f.tags || [];\n  for (const t of tags) {\n    if (['nuclei', 'sqlmap', 'ffuf', 'xss', 'grype', 'xsstrike'].includes(t)) {\n      byScanner[t] = (byScanner[t] || 0) + 1;\n    }\n  }\n\n  // Recent findings (last 24h)\n  const created = new Date(f.created || f.date || 0);\n  if (created > oneDayAgo) {\n    recentFindings.push({\n      id: f.id,\n      title: f.title,\n      severity: f.severity,\n      scanner: tags.find(t => ['nuclei','sqlmap','ffuf','xss','grype','xsstrike'].includes(t)) || 'unknown'\n    });\n  }\n}\n\nconst total = findings.length;\nconst critHigh = (byServerity.Critical || 0) + (byServerity.High || 0);\n\n// Priority distribution from tags\nconst byPriority = { critical: 0, high: 0, medium: 0, low: 0 };\nfor (const f of findings) {\n  for (const t of (f.tags || [])) {\n    const m = String(t).match(/^priority-(\\d+)$/);\n    if (m) {\n      const p = parseInt(m[1]);\n      if (p >= 80) byPriority.critical++;\n      else if (p >= 60) byPriority.high++;\n      else if (p >= 40) byPriority.medium++;\n      else byPriority.low++;\n    }\n  }\n}\n\nreturn [{\n  json: {\n    scanResult: {\n      jobName: jobData.jobName,\n      status: jobData.status,\n      quickMode: jobData.quickMode === '1',\n      startedAt: jobData.startedAt,\n      completedAt: jobData.completedAt,\n      duration: jobData.startedAt && jobData.completedAt\n        ? Math.round((new Date(jobData.completedAt) - new Date(jobData.startedAt)) / 1000)\n        : null\n    },\n    summary: {\n      totalFindings: total,\n      criticalAndHigh: critHigh,\n      bySeverity: byServerity,\n      byScanner,\n      byPriority,\n      newLast24h: recentFindings.length\n    },\n    recentFindings: recentFindings.slice(0, 20),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "build-scan-summary",
+      "name": "Build Scan Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1620, 180]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message: 'Scan completed', data: $json }, null, 2) }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "respond-scan-ok",
+      "name": "Respond: Scan OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1860, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const jobData = $('Check Job Status').first()?.json || $input.first()?.json || {};\nconst errorInfo = $('Create Scan Job').first()?.json || {};\n\nreturn [{\n  json: {\n    error: true,\n    status: jobData.status || 'Error',\n    jobName: jobData.jobName || 'unknown',\n    message: `Scan ${jobData.status || 'failed'}: job=${jobData.jobName || 'N/A'}`,\n    pollCount: jobData.pollCount || 0,\n    failed: jobData.failed || 0,\n    errorDetails: errorInfo.message || errorInfo.reason || null,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "build-error-report",
+      "name": "Build Error Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1380, 480]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: $json.message, data: $json }, null, 2) }}",
+        "options": { "responseCode": 500 }
+      },
+      "id": "respond-scan-error",
+      "name": "Respond: Scan Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1620, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log error to n8n execution history (notification sink)\nconst err = $input.first().json;\nconsole.log(`[VOC ALERT] Scan failed: ${err.message}`);\n// To wire real notifications: replace this with an HTTP Request to your\n// Slack webhook, Discord webhook, or email API.\n// The URL should be set as an n8n credential or environment variable.\nreturn [{ json: { notified: true, channel: 'execution-log', ...err } }];"
+      },
+      "id": "notify-error",
+      "name": "Notify: Scan Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1620, 660]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/findings/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "active", "value": "true" },
+            { "name": "limit", "value": "500" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "dd-get-findings-dashboard",
+      "name": "Get Findings (Dashboard)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-300, 720]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/tests/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "limit", "value": "50" },
+            { "name": "o", "value": "-updated" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "dd-get-tests",
+      "name": "Get Test History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-300, 900]
+    },
+    {
+      "parameters": {
+        "jsCode": "const findingsResp = $('Get Findings (Dashboard)').first()?.json || {};\nconst testsResp = $('Get Test History').first()?.json || {};\n\nconst findings = findingsResp.results || [];\nconst tests = testsResp.results || [];\n\n// --- Severity breakdown ---\nconst bySeverity = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };\nconst byScanner = {};\nconst byTarget = {};\n\nfor (const f of findings) {\n  const sev = f.severity || 'Info';\n  bySeverity[sev] = (bySeverity[sev] || 0) + 1;\n  const tags = f.tags || [];\n  for (const t of tags) {\n    if (['nuclei','sqlmap','ffuf','xss','grype','xsstrike','crawler'].includes(t)) {\n      byScanner[t] = (byScanner[t] || 0) + 1;\n    }\n    if (['juice-shop','dvwa','web-dvwa'].includes(t)) {\n      byTarget[t] = (byTarget[t] || 0) + 1;\n    }\n  }\n}\n\n// --- Priority distribution ---\nconst byPriority = { critical: 0, high: 0, medium: 0, low: 0, unscored: 0 };\nfor (const f of findings) {\n  let scored = false;\n  for (const t of (f.tags || [])) {\n    const m = String(t).match(/^priority-(\\d+)$/);\n    if (m) {\n      scored = true;\n      const p = parseInt(m[1]);\n      if (p >= 80) byPriority.critical++;\n      else if (p >= 60) byPriority.high++;\n      else if (p >= 40) byPriority.medium++;\n      else byPriority.low++;\n    }\n  }\n  if (!scored) byPriority.unscored++;\n}\n\n// --- Top critical findings ---\nconst topFindings = findings\n  .filter(f => f.severity === 'Critical' || f.severity === 'High')\n  .slice(0, 15)\n  .map(f => ({\n    id: f.id,\n    title: f.title,\n    severity: f.severity,\n    cve: f.cve || null,\n    verified: f.verified || false,\n    active: f.active,\n    date: f.date,\n    tags: f.tags || []\n  }));\n\n// --- Recent scan history ---\nconst scanHistory = tests.slice(0, 10).map(t => ({\n  id: t.id,\n  title: t.title,\n  scanType: t.scan_type_name || t.test_type_name,\n  updated: t.updated,\n  findingCount: t.finding_count || 0\n}));\n\n// --- MTTR estimate ---\nconst now = new Date();\nconst thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);\nlet closedCount = 0;\nlet totalResolutionDays = 0;\nfor (const f of findings) {\n  if (f.is_mitigated && f.mitigated) {\n    const created = new Date(f.date || f.created);\n    const mitigated = new Date(f.mitigated);\n    if (mitigated > thirtyDaysAgo) {\n      closedCount++;\n      totalResolutionDays += (mitigated - created) / (1000 * 60 * 60 * 24);\n    }\n  }\n}\nconst mttr = closedCount > 0 ? Math.round(totalResolutionDays / closedCount * 10) / 10 : null;\n\nconst dashboard = {\n  pipelineStatus: 'operational',\n  lastUpdated: new Date().toISOString(),\n  findings: {\n    total: findings.length,\n    totalActive: findingsResp.count || findings.length,\n    bySeverity,\n    byScanner,\n    byTarget,\n    byPriority,\n    criticalAndHigh: (bySeverity.Critical || 0) + (bySeverity.High || 0)\n  },\n  metrics: {\n    mttrDays: mttr,\n    closedLast30d: closedCount,\n    scannerCount: Object.keys(byScanner).length,\n    targetCount: Object.keys(byTarget).length\n  },\n  topFindings,\n  scanHistory\n};\n\nreturn [{ json: dashboard }];"
+      },
+      "id": "build-dashboard",
+      "name": "Build Dashboard Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 780]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json, null, 2) }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "respond-dashboard",
+      "name": "Respond: Dashboard",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [240, 780]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Health check: ping DefectDojo, prioritization service, and scan targets\nconst checks = [];\n\nasync function checkUrl(name, url) {\n  try {\n    const resp = await this.helpers.request({ url, method: 'GET', timeout: 5000, resolveWithFullResponse: true });\n    return { name, status: 'healthy', statusCode: resp.statusCode || 200 };\n  } catch (e) {\n    return { name, status: 'unhealthy', error: e.message || String(e) };\n  }\n}\n\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    checks: [\n      { name: 'defectdojo', url: 'http://defectdojo-django.voc-core.svc.cluster.local/' },\n      { name: 'prioritization', url: 'http://prioritization-service.voc-core.svc.cluster.local:8000/healthz' },\n      { name: 'juice-shop', url: 'http://juice-shop.targets.svc.cluster.local:3000/' },\n      { name: 'dvwa', url: 'http://dvwa.targets.svc.cluster.local/' }\n    ]\n  }\n}];"
+      },
+      "id": "health-list",
+      "name": "Health Check Targets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 960]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://defectdojo-django.voc-core.svc.cluster.local/",
+        "options": { "timeout": 5000 }
+      },
+      "id": "health-dd",
+      "name": "Ping DefectDojo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-60, 880],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://prioritization-service.voc-core.svc.cluster.local:8000/healthz",
+        "options": { "timeout": 5000 }
+      },
+      "id": "health-prio",
+      "name": "Ping Prioritization",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-60, 1040],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://juice-shop.targets.svc.cluster.local:3000/",
+        "options": { "timeout": 5000 }
+      },
+      "id": "health-juice",
+      "name": "Ping Juice Shop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [180, 880],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://dvwa.targets.svc.cluster.local/",
+        "options": { "timeout": 5000 }
+      },
+      "id": "health-dvwa",
+      "name": "Ping DVWA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [180, 1040],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate health check results\nconst dd = $('Ping DefectDojo').first()?.json;\nconst prio = $('Ping Prioritization').first()?.json;\nconst juice = $('Ping Juice Shop').first()?.json;\nconst dvwa = $('Ping DVWA').first()?.json;\n\nfunction toStatus(resp, name) {\n  if (!resp) return { name, status: 'unknown' };\n  if (resp.error || resp.message?.includes('ECONNREFUSED')) {\n    return { name, status: 'unhealthy', error: resp.message || resp.error };\n  }\n  return { name, status: 'healthy' };\n}\n\nconst results = [\n  toStatus(dd, 'DefectDojo'),\n  toStatus(prio, 'Prioritization Service'),\n  toStatus(juice, 'Juice Shop'),\n  toStatus(dvwa, 'DVWA')\n];\n\nconst allHealthy = results.every(r => r.status === 'healthy');\n\n// Store in static data for dashboard access\nconst staticData = $getWorkflowStaticData('global');\nstaticData.lastHealthCheck = {\n  timestamp: new Date().toISOString(),\n  overall: allHealthy ? 'healthy' : 'degraded',\n  services: results\n};\n\nconsole.log(`[VOC Health] ${allHealthy ? 'All services healthy' : 'Some services unhealthy: ' + results.filter(r => r.status !== 'healthy').map(r => r.name).join(', ')}`);\n\nreturn [{ json: staticData.lastHealthCheck }];"
+      },
+      "id": "aggregate-health",
+      "name": "Aggregate Health",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 960]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/findings/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "active", "value": "true" },
+            { "name": "limit", "value": "200" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "dd-poll-findings",
+      "name": "Get Active Findings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-300, 1440]
+    },
+    {
+      "parameters": {
+        "jsCode": "const findings = $input.first().json?.results || [];\nconst out = [];\n\nfor (const f of findings) {\n  const tags = (f.tags || []).map(t => String(t));\n  const pTag = tags.find(t => t.startsWith('priority-'));\n  const priority = pTag ? parseInt(pTag.split('-')[1], 10) : null;\n  out.push({\n    json: {\n      id: f.id,\n      title: f.title,\n      severity: f.severity,\n      cve: f.cve || null,\n      priority,\n      verified: f.verified || false,\n      tags,\n      date: f.date,\n      endpoints: (f.endpoints || []).slice(0, 3)\n    }\n  });\n}\n\nreturn out.length > 0 ? out : [{ json: { id: null, title: 'No active findings', severity: 'Info', priority: 0 } }];"
+      },
+      "id": "flatten-findings",
+      "name": "Flatten & Enrich",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-60, 1440]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "is-critical",
+              "leftValue": "={{ $json.priority }}",
+              "rightValue": 80,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-critical",
+      "name": "Priority ≥ 80 (Critical)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [180, 1440]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "is-high",
+              "leftValue": "={{ $json.priority }}",
+              "rightValue": 60,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-high",
+      "name": "Priority ≥ 60 (High)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [420, 1560]
+    },
+    {
+      "parameters": {
+        "jsCode": "// CRITICAL PRIORITY — Log to execution history.\n// To wire real alerting, replace this with an HTTP Request node\n// pointing to your Slack/Discord webhook or PagerDuty.\nconst f = $input.first().json;\nconsole.log(`[VOC CRITICAL] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'critical', notified: true, channel: 'execution-log' } }];"
+      },
+      "id": "alert-critical",
+      "name": "Alert: Critical",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 1380]
+    },
+    {
+      "parameters": {
+        "jsCode": "// HIGH PRIORITY — Log to execution history.\nconst f = $input.first().json;\nconsole.log(`[VOC HIGH] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'high', notified: true, channel: 'execution-log' } }];"
+      },
+      "id": "alert-high",
+      "name": "Alert: High",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 1500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// MEDIUM / LOW — Log only, no notification.\nconst f = $input.first().json;\nconsole.log(`[VOC INFO] Finding #${f.id}: ${f.title} (priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'info', notified: false } }];"
+      },
+      "id": "log-low",
+      "name": "Log: Medium/Low",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 1680]
+    }
+  ],
+  "connections": {
+    "Nightly Scan (02:00)": {
+      "main": [
+        [{ "node": "Set Scan Mode", "type": "main", "index": 0 }]
+      ]
+    },
+    "Webhook: Start Full Scan": {
+      "main": [
+        [{ "node": "Set Scan Mode", "type": "main", "index": 0 }]
+      ]
+    },
+    "Webhook: Start Quick Scan": {
+      "main": [
+        [{ "node": "Set Quick Mode", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set Scan Mode": {
+      "main": [
+        [{ "node": "Create Scan Job", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set Quick Mode": {
+      "main": [
+        [{ "node": "Create Scan Job", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Scan Job": {
+      "main": [
+        [{ "node": "Extract Job Name", "type": "main", "index": 0 }],
+        [{ "node": "Build Error Report", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Job Name": {
+      "main": [
+        [{ "node": "Poll Job Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Poll Job Status": {
+      "main": [
+        [{ "node": "Check Job Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Job Status": {
+      "main": [
+        [{ "node": "Job Done?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Job Done?": {
+      "main": [
+        [{ "node": "Scan Succeeded?", "type": "main", "index": 0 }],
+        [{ "node": "Wait 15s", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait 15s": {
+      "main": [
+        [{ "node": "Poll Job Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Scan Succeeded?": {
+      "main": [
+        [{ "node": "Get Post-Scan Findings", "type": "main", "index": 0 }],
+        [{ "node": "Build Error Report", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Post-Scan Findings": {
+      "main": [
+        [{ "node": "Build Scan Summary", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Scan Summary": {
+      "main": [
+        [{ "node": "Respond: Scan OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Error Report": {
+      "main": [
+        [
+          { "node": "Respond: Scan Error", "type": "main", "index": 0 },
+          { "node": "Notify: Scan Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Webhook: Dashboard": {
+      "main": [
+        [
+          { "node": "Get Findings (Dashboard)", "type": "main", "index": 0 },
+          { "node": "Get Test History", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Findings (Dashboard)": {
+      "main": [
+        [{ "node": "Build Dashboard Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Test History": {
+      "main": [
+        [{ "node": "Build Dashboard Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Dashboard Data": {
+      "main": [
+        [{ "node": "Respond: Dashboard", "type": "main", "index": 0 }]
+      ]
+    },
+    "Health Check (5 min)": {
+      "main": [
+        [{ "node": "Health Check Targets", "type": "main", "index": 0 }]
+      ]
+    },
+    "Health Check Targets": {
+      "main": [
+        [
+          { "node": "Ping DefectDojo", "type": "main", "index": 0 },
+          { "node": "Ping Prioritization", "type": "main", "index": 0 },
+          { "node": "Ping Juice Shop", "type": "main", "index": 0 },
+          { "node": "Ping DVWA", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Ping DefectDojo": {
+      "main": [
+        [{ "node": "Aggregate Health", "type": "main", "index": 0 }],
+        [{ "node": "Aggregate Health", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ping Prioritization": {
+      "main": [
+        [{ "node": "Aggregate Health", "type": "main", "index": 0 }],
+        [{ "node": "Aggregate Health", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ping Juice Shop": {
+      "main": [
+        [{ "node": "Aggregate Health", "type": "main", "index": 0 }],
+        [{ "node": "Aggregate Health", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ping DVWA": {
+      "main": [
+        [{ "node": "Aggregate Health", "type": "main", "index": 0 }],
+        [{ "node": "Aggregate Health", "type": "main", "index": 0 }]
+      ]
+    },
+    "Poll Findings (5 min)": {
+      "main": [
+        [{ "node": "Get Active Findings", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Active Findings": {
+      "main": [
+        [{ "node": "Flatten & Enrich", "type": "main", "index": 0 }]
+      ]
+    },
+    "Flatten & Enrich": {
+      "main": [
+        [{ "node": "Priority ≥ 80 (Critical)?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Priority ≥ 80 (Critical)?": {
+      "main": [
+        [{ "node": "Alert: Critical", "type": "main", "index": 0 }],
+        [{ "node": "Priority ≥ 60 (High)?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Priority ≥ 60 (High)?": {
+      "main": [
+        [{ "node": "Alert: High", "type": "main", "index": 0 }],
+        [{ "node": "Log: Medium/Low", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "meta": {
+    "instanceId": "default",
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    { "name": "voc" },
+    { "name": "dashboard" },
+    { "name": "master" }
+  ]
+}

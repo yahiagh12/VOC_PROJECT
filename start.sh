@@ -10,9 +10,23 @@ echo "  VOC - Starting Everything...          "
 echo "========================================"
 echo ""
 
-# Build the toolbox image
-echo "[VOC] Building toolbox image..."
-docker compose build
+# Only rebuild if toolbox files changed (saves ~30s on restarts)
+if command -v sha256sum >/dev/null 2>&1; then
+  HASH=$(cat toolbox/Dockerfile toolbox/entrypoint.sh toolbox/profile.sh | sha256sum | cut -d' ' -f1)
+elif command -v shasum >/dev/null 2>&1; then
+  HASH=$(cat toolbox/Dockerfile toolbox/entrypoint.sh toolbox/profile.sh | shasum -a 256 | cut -d' ' -f1)
+else
+  HASH="fallback-hash-$(date +%s)"
+fi
+CACHE_FILE=".toolbox-build-hash"
+CACHED=$(cat "$CACHE_FILE" 2>/dev/null || echo "")
+if [ "$HASH" != "$CACHED" ]; then
+    echo "[VOC] Toolbox files changed — rebuilding image..."
+    docker compose build
+    echo -n "$HASH" > "$CACHE_FILE"
+else
+    echo "[VOC] Toolbox image up to date (skipping build)"
+fi
 
 # Clean up any leftover containers that might hold ports
 echo "[VOC] Cleaning up old containers..."

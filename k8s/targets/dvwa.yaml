@@ -22,6 +22,10 @@ spec:
           # All-in-one image (Apache + PHP + MySQL via supervisord).
           # Lab only: NEVER expose outside the cluster.
           image: vulnerables/web-dvwa:latest
+          lifecycle:
+            postStart:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 10 && php -r \"\\$_POST['create_db']='Create / Reset Database'; \\$_SERVER['HTTP_HOST']='localhost'; \\$_SERVER['SERVER_NAME']='localhost'; \\$_SERVER['DOCUMENT_ROOT']='/var/www/html'; include('/var/www/html/setup.php');\""]
           ports:
             - containerPort: 80
               name: http

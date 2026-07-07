@@ -11,6 +11,13 @@
 image:
   tag: latest
 
+# ServiceAccount must exist for RBAC binding in n8n-rbac.yaml to work.
+# The SA is projected into the n8n pod so the master workflow can call
+# the K8s API to create/poll scan orchestrator Jobs.
+serviceAccount:
+  create: true
+  name: n8n
+
 ingress:
   enabled: false
 
@@ -32,3 +39,18 @@ postgresql:
     database: "n8n"
     username: "n8n"
     password: "n8n-lab-password"
+
+# Environment variables available to all n8n workflows via $env.
+# DD credentials let the master dashboard workflow query DefectDojo.
+extraEnv:
+  - name: N8N_BLOCK_ENV_ACCESS_IN_NODE
+    value: "false"
+  - name: DD_URL
+    value: "http://defectdojo-django.voc-core.svc.cluster.local"
+  - name: WEBHOOK_URL
+    value: ""
+  - name: K8S_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: n8n-token
+        key: token

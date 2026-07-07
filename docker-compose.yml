@@ -10,8 +10,9 @@
 # containers. The kubeconfig is written to .kube/ in the repo root so
 # it's accessible from the Windows host too.
 #
-# On Windows host, after voc-up:
-#   $env:KUBECONFIG = "C:\Users\Regal\Desktop\voc\.kube\config"
+# On the host, after voc-up:
+#   $env:KUBECONFIG = "<repo-root>\.kube\config"       # Windows
+#   export KUBECONFIG="$(pwd)/.kube/config"             # macOS/Linux
 #   kubectl get nodes
 
 services:

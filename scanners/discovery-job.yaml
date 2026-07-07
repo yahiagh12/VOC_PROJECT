@@ -39,7 +39,7 @@ spec:
               # "URL -- method -- source" depending on build. We extract
               # just the leading http(s):// token so downstream tools get
               # a clean URL list regardless of gospider's exact format.
-              gospider -s "__TARGET_URL__" --sitemap --robots --depth 2 --js=false -q \
+              gospider -s "__TARGET_URL__" --sitemap --robots --depth 3 --js=false -q \
                 2>/dev/null \
                 | grep -oE 'https?://[^[:space:]|]+' \
                 | sort -u > /work/urls.txt || true

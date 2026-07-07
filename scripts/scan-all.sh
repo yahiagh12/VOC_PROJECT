@@ -11,15 +11,30 @@ set -euo pipefail
 #
 # Designed to run inside the VOC toolbox container.
 #
+# Usage:
+#   voc-scan           # full scan (~10-12 min)
+#   voc-scan --quick   # skip nuclei + xss (~6 min)
+#
 # Caching strategy (so nothing re-downloads every run):
 #   - Grype vuln DB:  Docker named volume "voc-grype-db"
 #   - Nuclei templates: baked into container image (pulled once by k3d)
 #   - Scanner images:  cached on k3d node after first pull
+#
+# Performance:
+#   - Grype scans run in parallel (Step 3)
+#   - Nuclei harvest runs in background, overlapping with Step 5
+#   - Step 5 scanners (sqlmap/ffuf/xss) run in parallel per-target
 # ============================================================
 
+START_TIME=$SECONDS
+
+# --- Mode ---
+QUICK_MODE="${QUICK_MODE:-0}"
+[[ "${1:-}" == "--quick" ]] && { QUICK_MODE=1; shift; }
+
 # --- Configuration (from .env or env vars) ---
-DD_API_KEY="${DD_API_KEY:?ERROR: DD_API_KEY is required (set in .env)}"
-DD_URL="http://localhost:8080"
+DD_API_KEY="${DD_API_KEY:?ERROR: DD_API_KEY is required}"
+DD_URL="${DD_URL:-http://localhost:8080}"
 DD_PRODUCT_NAME="${DD_PRODUCT_NAME:-Lab Targets}"
 DD_ENGAGEMENT_NAME="${DD_ENGAGEMENT_NAME:-Continuous Scanning}"
 DD_ENGAGEMENT_ID="${DD_ENGAGEMENT_ID:-}"
@@ -46,7 +61,7 @@ DISCOVERY_TARGETS=(
 # `enabled_dast:` field read from scanners/targets.yaml. For now this is
 # a targeted Phase 0 workaround so DVWA runs are not pointlessly slow.
 DAST_DISABLED_TARGETS=(
-  "dvwa"
+  # DVWA is now fully scanned with authentication
 )
 
 # --- Colors ---
@@ -61,67 +76,89 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 # ============================================================
 
 # --- Helper: upload to DefectDojo (with retry for 5xx/000) ---
+# Tries reimport-scan first (deduplicates against existing test). If reimport
+# returns 400/404 (no prior test exists), falls back to import-scan (creates
+# a fresh test). This makes the first-ever run succeed without manual setup.
 dd_import() {
   local file="$1" scan_type="$2" tags="$3"
-  local max_retries=3 attempt=1
+  local max_retries=3
 
-  while [ "$attempt" -le "$max_retries" ]; do
-    local response_file curl_err
-    response_file=$(mktemp)
-    curl_err=$(mktemp)
+  # Try reimport first, then import as fallback
+  local endpoints=("reimport-scan" "import-scan")
+  for endpoint in "${endpoints[@]}"; do
+    local attempt=1
+    while [ "$attempt" -le "$max_retries" ]; do
+      local response_file curl_err
+      response_file=$(mktemp)
+      curl_err=$(mktemp)
 
-    # Build curl args as an array to avoid shell quoting issues
-    local -a curl_args=(
-      -sS -X POST "$DD_URL/api/v2/reimport-scan/"
-      -H "Authorization: Token $DD_API_KEY"
-      -F "scan_type=$scan_type"
-      -F "test_title=$scan_type"
-      -F "file=@$file"
-      -F "tags=$tags"
-      --max-time 600
-      --retry 2
-      --retry-delay 5
-    )
+      # Build curl args as an array to avoid shell quoting issues
+      local -a curl_args=(
+        -sS -X POST "$DD_URL/api/v2/${endpoint}/"
+        -H "Authorization: Token $DD_API_KEY"
+        -F "scan_type=$scan_type"
+        -F "test_title=$scan_type"
+        -F "file=@$file"
+        -F "tags=$tags"
+        --max-time 600
+        --retry 2
+        --retry-delay 5
+      )
 
-    if [ -n "$DD_ENGAGEMENT_ID" ]; then
-      curl_args+=(-F "engagement=$DD_ENGAGEMENT_ID")
-    else
-      curl_args+=(-F "product_name=$DD_PRODUCT_NAME")
-      curl_args+=(-F "engagement_name=$DD_ENGAGEMENT_NAME")
-      curl_args+=(-F "auto_create_context=true")
-      curl_args+=(-F "product_type_name=Research")
-    fi
-
-    local code
-    code=$(curl "${curl_args[@]}" -o "$response_file" -w "%{http_code}" 2>"$curl_err") || code="000"
-
-    if [ "$code" = "201" ] || [ "$code" = "200" ]; then
-      log_success "Imported to DefectDojo (HTTP $code)"
-      rm -f "$response_file" "$curl_err"
-      return 0
-    elif [ "${code:0:1}" = "5" ] || [ "$code" = "000" ]; then
-      if [ "$attempt" -lt "$max_retries" ]; then
-        log_warning "DefectDojo returned HTTP $code -- retrying in 15s (attempt $attempt/$max_retries)"
-        [ "$code" = "000" ] && log_warning "Curl error: $(cat "$curl_err" 2>/dev/null)"
-        rm -f "$response_file" "$curl_err"
-        sleep 15
-        attempt=$((attempt + 1))
+      if [ -n "$DD_ENGAGEMENT_ID" ]; then
+        curl_args+=(-F "engagement=$DD_ENGAGEMENT_ID")
       else
-        log_error "DefectDojo upload failed (HTTP $code) after $max_retries attempts"
-        [ "$code" = "000" ] && log_error "Curl error: $(cat "$curl_err" 2>/dev/null)"
+        curl_args+=(-F "product_name=$DD_PRODUCT_NAME")
+        curl_args+=(-F "engagement_name=$DD_ENGAGEMENT_NAME")
+        curl_args+=(-F "auto_create_context=true")
+        curl_args+=(-F "product_type_name=Research")
+      fi
+
+      local code
+      code=$(curl "${curl_args[@]}" -o "$response_file" -w "%{http_code}" 2>"$curl_err") || code="000"
+
+      if [ "$code" = "201" ] || [ "$code" = "200" ]; then
+        log_success "Imported to DefectDojo via $endpoint (HTTP $code)"
+        rm -f "$response_file" "$curl_err"
+        return 0
+      elif [ "$code" = "400" ] || [ "$code" = "404" ]; then
+        if [ "$endpoint" = "reimport-scan" ]; then
+          log_info "reimport returned $code (no prior test) — falling back to import-scan"
+          rm -f "$response_file" "$curl_err"
+          break  # Break inner retry loop, try next endpoint
+        else
+          log_error "DefectDojo import-scan failed (HTTP $code)"
+          head -c 500 "$response_file" 2>/dev/null | sed 's/^/  > /' || true
+          echo ""
+          rm -f "$response_file" "$curl_err"
+          return 1
+        fi
+      elif [ "${code:0:1}" = "5" ] || [ "$code" = "000" ]; then
+        if [ "$attempt" -lt "$max_retries" ]; then
+          log_warning "DefectDojo returned HTTP $code -- retrying in 15s (attempt $attempt/$max_retries)"
+          [ "$code" = "000" ] && log_warning "Curl error: $(cat "$curl_err" 2>/dev/null)"
+          rm -f "$response_file" "$curl_err"
+          sleep 15
+          attempt=$((attempt + 1))
+        else
+          log_error "DefectDojo upload failed (HTTP $code) after $max_retries attempts"
+          [ "$code" = "000" ] && log_error "Curl error: $(cat "$curl_err" 2>/dev/null)"
+          head -c 500 "$response_file" 2>/dev/null | sed 's/^/  > /' || true
+          echo ""
+          rm -f "$response_file" "$curl_err"
+          return 1
+        fi
+      else
+        log_error "DefectDojo upload failed (HTTP $code)"
         head -c 500 "$response_file" 2>/dev/null | sed 's/^/  > /' || true
         echo ""
         rm -f "$response_file" "$curl_err"
         return 1
       fi
-    else
-      log_error "DefectDojo upload failed (HTTP $code)"
-      head -c 500 "$response_file" 2>/dev/null | sed 's/^/  > /' || true
-      echo ""
-      rm -f "$response_file" "$curl_err"
-      return 1
-    fi
+    done
   done
+  log_error "DefectDojo upload failed after trying both reimport-scan and import-scan"
+  return 1
 }
 
 # wait_for_job  : poll a k8s Job until complete/failed/timeout. On failure
@@ -326,6 +363,20 @@ for target_pair in "${DISCOVERY_TARGETS[@]}"; do
     fi
   fi
 
+  # Supplement gospider's crawl with a hand-curated seed list of known
+  # endpoints (scanners/seed-urls.<short>.txt). This covers SPA routes,
+  # REST APIs, and auth-gated pages that gospider's static crawl misses.
+  seed_urls_file="$SCANNERS_DIR/seed-urls.${target_short}.txt"
+  if [ -f "$seed_urls_file" ]; then
+    before_count=$(wc -l < "$all_urls" 2>/dev/null || echo 0)
+    # Strip comments/blank lines, append, then dedup.
+    grep -vE '^\s*(#|$)' "$seed_urls_file" >> "$all_urls" 2>/dev/null || true
+    sort -u -o "$all_urls" "$all_urls"
+    after_count=$(wc -l < "$all_urls" 2>/dev/null || echo 0)
+    added=$((after_count - before_count))
+    [ "$added" -gt 0 ] && log_info "seed URLs: +$added new URLs from $seed_urls_file (total: $after_count)"
+  fi
+
   # Filter to URLs WITH parameters -- these are the sqlmap/xss candidates.
   if [ -s "$all_urls" ]; then
     grep -E '\?[A-Za-z0-9_.-]+=' "$all_urls" > "$param_urls" 2>/dev/null || true
@@ -363,113 +414,170 @@ done
 
 # ============================================================
 # Step 3: Grype SCA scan (Docker-based, DB cached in volume)
+#
+# Performance: both images scan in parallel. Each runs in a
+# background subshell; output is buffered to a temp file and
+# printed sequentially after both complete.
 # ============================================================
 log_info "=== Step 3: Grype SCA scan ==="
 
-for GRYPE_IMAGE in "bkimminich/juice-shop:latest" "vulnerables/web-dvwa:latest"; do
+# run_grype <image> : scan a single container image with Grype via Kubernetes Job,
+# import results to DefectDojo. Designed to run inside a subshell.
+run_grype() {
+  local GRYPE_IMAGE="$1"
+  local IMAGE_SHORT
   IMAGE_SHORT=$(echo "$GRYPE_IMAGE" | sed 's|.*/||; s|:.*||')
-  GRYPE_REPORT="$REPORTS_DIR/grype_${IMAGE_SHORT}_$TIMESTAMP.json"
-  # Phase 0 fix: previously Grype stderr was sent to /dev/null, so a Grype
-  # run that failed (stale DB snapshot, image pull error, rate limit,
-  # etc.) showed only "[ERROR] Grype scan failed for X" with no detail.
-  # Capture stderr to a sidecar log so the cause is diagnosable.
-  GRYPE_STDERR="$REPORTS_DIR/grype_${IMAGE_SHORT}_${TIMESTAMP}_stderr.log"
+  local JOB_NAME="grype-${IMAGE_SHORT}-${TIMESTAMP}"
+  local GRYPE_REPORT="$REPORTS_DIR/grype_${IMAGE_SHORT}_$TIMESTAMP.json"
 
-  log_info "Grype -> $GRYPE_IMAGE (via Docker)"
-
-  # "voc-grype-db" is a Docker named volume that persists the Grype
-  # vulnerability database (~100 MB). First run downloads it; subsequent
-  # runs reuse the cached copy (saves 30-60 s per run).
-  if docker run --rm \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v voc-grype-db:/root/.cache/grype \
-    anchore/grype:latest "$GRYPE_IMAGE" -o json > "$GRYPE_REPORT" 2>"$GRYPE_STDERR"; then
-
-    if [ -s "$GRYPE_REPORT" ]; then
+  log_info "Grype -> $GRYPE_IMAGE (via Kubernetes)"
+  apply_job_template "$SCANNERS_DIR/grype-job.yaml" "$JOB_NAME" JOB_NAME="$JOB_NAME" TARGET_IMAGE="$GRYPE_IMAGE"
+  
+  if wait_for_job "$JOB_NAME" scanning 900 "grype scan ($IMAGE_SHORT)"; then
+    if extract_marker_results "$JOB_NAME" GRYPE "$GRYPE_REPORT"; then
+      local FINDING_COUNT
       FINDING_COUNT=$(jq '.matches | length' "$GRYPE_REPORT" 2>/dev/null || echo "?")
       log_success "Grype found $FINDING_COUNT vulnerabilities in $IMAGE_SHORT"
       dd_import "$GRYPE_REPORT" "Anchore Grype" "container,grype,$IMAGE_SHORT"
     else
-      log_warning "Grype report is empty for $IMAGE_SHORT (stderr at $GRYPE_STDERR)"
+      log_warning "Grype report extraction failed for $IMAGE_SHORT"
     fi
   else
-    log_error "Grype scan failed for $IMAGE_SHORT -- stderr logged to $GRYPE_STDERR"
-    # Show the first 20 lines of stderr inline so the operator doesn't
-    # always have to open the sidecar file.
-    tail -n 20 "$GRYPE_STDERR" 2>/dev/null | sed 's/^/  > /' || true
+    log_error "Grype job failed for $IMAGE_SHORT"
   fi
+}
+
+# Launch Grype scans in parallel — one subshell per image.
+grype_pids=()
+grype_logs=()
+for GRYPE_IMAGE in "bkimminich/juice-shop:latest" "vulnerables/web-dvwa:latest"; do
+  tmplog=$(mktemp)
+  grype_logs+=("$tmplog")
+  ( run_grype "$GRYPE_IMAGE" > "$tmplog" 2>&1 ) &
+  grype_pids+=($!)
 done
+# Wait for all Grype scans to finish, then print buffered output.
+for i in "${!grype_pids[@]}"; do
+  wait "${grype_pids[$i]}" || true
+  cat "${grype_logs[$i]}"
+  rm -f "${grype_logs[$i]}"
+done
+
+# ============================================================
+# Step 3b: Authenticate to targets
+# ============================================================
+declare -A TARGETS_COOKIE=()
+if [ -n "${TARGETS_CM["dvwa"]+x}" ]; then
+  log_info "=== Step 3b: Authenticating to DVWA ==="
+  auth_job="auth-dvwa-${TIMESTAMP}"
+  auth_raw="$REPORTS_DIR/auth_dvwa_${TIMESTAMP}.txt"
+  target_url=""
+  for pair in "${DISCOVERY_TARGETS[@]}"; do
+    if [ "${pair%%.*}" = "dvwa" ]; then target_url="http://$pair"; break; fi
+  done
+  
+  if apply_job_template "$SCANNERS_DIR/dvwa-auth-job.yaml" "$auth_job" \
+          JOB_NAME="$auth_job" TARGET_URL="$target_url"; then
+    if wait_for_job "$auth_job" scanning 120 "dvwa auth"; then
+      extract_marker_results "$auth_job" "AUTH" "$auth_raw"
+      if [ -s "$auth_raw" ]; then
+        TARGETS_COOKIE["dvwa"]=$(cat "$auth_raw" | tr -d '\r' | head -n1)
+        log_success "DVWA authenticated (cookie obtained)"
+      fi
+    fi
+    kubectl delete job "$auth_job" -n scanning --ignore-not-found >/dev/null 2>&1 || true
+  fi
+fi
 
 # ============================================================
 # Step 4: Nuclei DAST scan per discovered target
 #
-# Phase 1 already crawled each target, so here we drop the gospider init
-# container that the previous version ran per-Nuclei-job (duplicate work)
-# and instead mount the per-target ConfigMap's all_urls.txt directly into
-# /targets. Result extraction is unchanged (sed/jq between markers).
+# Performance: Nuclei jobs are submitted here but the wait+extract
+# ("harvest") runs in a background function so Step 5 can start
+# immediately.  The harvest PID is joined after Step 5 completes.
+# In --quick mode nuclei is skipped entirely.
 # ============================================================
-log_info "=== Step 4: Nuclei DAST scan ==="
-NUCLEI_JOB_NAMES=()
-NUCLEI_TARGET_SHORTS=()
+NUCLEI_HARVEST_PID=""
 
-for target_short in "${!TARGETS_CM[@]}"; do
-  cm_name="${TARGETS_CM[$target_short]}"
-  JOB_NAME="nuclei-${target_short}-${TIMESTAMP}"
-  NUCLEI_JOB_NAMES+=("$JOB_NAME")
-  NUCLEI_TARGET_SHORTS+=("$target_short")
+if [ "$QUICK_MODE" = "1" ]; then
+  log_info "=== Step 4: Nuclei DAST scan (SKIPPED — quick mode) ==="
+else
+  log_info "=== Step 4: Nuclei DAST scan ==="
+  NUCLEI_JOB_NAMES=()
+  NUCLEI_TARGET_SHORTS=()
 
-  kubectl delete job "$JOB_NAME" -n scanning --ignore-not-found >/dev/null 2>&1
-  # Substitute the two markers we care about, then apply.
-  content="$(cat "$SCANNERS_DIR/nuclei-phase2-job.yaml")"
-  content="${content//__JOB_NAME__/$JOB_NAME}"
-  content="${content//__TARGETS_CM__/$cm_name}"
-  printf '%s' "$content" | kubectl apply -f - >/dev/null 2>&1
-  log_info "Submitted Nuclei job $JOB_NAME reading ConfigMap $cm_name"
-done
+  for target_short in "${!TARGETS_CM[@]}"; do
+    cm_name="${TARGETS_CM[$target_short]}"
+    JOB_NAME="nuclei-${target_short}-${TIMESTAMP}"
+    NUCLEI_JOB_NAMES+=("$JOB_NAME")
+    NUCLEI_TARGET_SHORTS+=("$target_short")
 
-# --- Wait + extract per Nuclei job ---
-for i in "${!NUCLEI_JOB_NAMES[@]}"; do
-  JOB_NAME="${NUCLEI_JOB_NAMES[$i]}"
-  target_short="${NUCLEI_TARGET_SHORTS[$i]}"
+    kubectl delete job "$JOB_NAME" -n scanning --ignore-not-found >/dev/null 2>&1
+    content="$(cat "$SCANNERS_DIR/nuclei-phase2-job.yaml")"
+    content="${content//__JOB_NAME__/$JOB_NAME}"
+    content="${content//__TARGETS_CM__/$cm_name}"
+    auth_cookie="${TARGETS_COOKIE[$target_short]:-}"
+    content="${content//__COOKIE__/$auth_cookie}"
+    printf '%s' "$content" | kubectl apply -f - >/dev/null 2>&1
+    log_info "Submitted Nuclei job $JOB_NAME reading ConfigMap $cm_name"
+  done
 
-  log_info "Waiting for $JOB_NAME ..."
-  if ! wait_for_job "$JOB_NAME" scanning 600 "nuclei scan ($target_short)"; then
-    kubectl delete job "$JOB_NAME" -n scanning >/dev/null 2>&1 || true
-    continue
-  fi
+  # --- Nuclei harvest function (runs in background) ---
+  # Waits for each Nuclei job, extracts results, imports to DefectDojo.
+  # Output is buffered to a temp file and printed when joined.
+  nuclei_harvest() {
+    for i in "${!NUCLEI_JOB_NAMES[@]}"; do
+      JOB_NAME="${NUCLEI_JOB_NAMES[$i]}"
+      target_short="${NUCLEI_TARGET_SHORTS[$i]}"
 
-  nuclei_report="$REPORTS_DIR/nuclei_${target_short}_${TIMESTAMP}.json"
-  nuclei_log="$REPORTS_DIR/nuclei_${target_short}_${TIMESTAMP}_debug.log"
-  pod_name=$(kubectl get pods -n scanning -l "job-name=$JOB_NAME" --no-headers -o name | head -1)
-  [ -n "$pod_name" ] && kubectl logs -n scanning "${pod_name#pod/}" > "$nuclei_log" 2>/dev/null || true
+      log_info "Waiting for $JOB_NAME ..."
+      if ! wait_for_job "$JOB_NAME" scanning 900 "nuclei scan ($target_short)"; then
+        kubectl delete job "$JOB_NAME" -n scanning >/dev/null 2>&1 || true
+        continue
+      fi
 
-  kubectl logs -n scanning "${pod_name#pod/}" -c nuclei 2>/dev/null \
-    | sed -n '/===NUCLEI_RESULTS_START===/,/===NUCLEI_RESULTS_END===/{ /===NUCLEI_RESULTS/d; p; }' \
-    | grep '^{' \
-    | jq -s '.' > "$nuclei_report" 2>/dev/null || echo '[]' > "$nuclei_report"
+      nuclei_report="$REPORTS_DIR/nuclei_${target_short}_${TIMESTAMP}.json"
+      nuclei_log="$REPORTS_DIR/nuclei_${target_short}_${TIMESTAMP}_debug.log"
+      pod_name=$(kubectl get pods -n scanning -l "job-name=$JOB_NAME" --no-headers -o name | head -1)
+      [ -n "$pod_name" ] && kubectl logs -n scanning "${pod_name#pod/}" > "$nuclei_log" 2>/dev/null || true
 
-  if [ -s "$nuclei_report" ] && [ "$(cat "$nuclei_report")" != "[]" ]; then
-    count=$(jq 'length' "$nuclei_report" 2>/dev/null || echo "?")
-    log_success "Nuclei found $count findings for $target_short"
-    dd_import "$nuclei_report" "Nuclei Scan" "web,nuclei,$target_short"
-  else
-    log_warning "Nuclei: no findings for $target_short -- check $nuclei_log"
-  fi
-  kubectl delete job "$JOB_NAME" -n scanning --ignore-not-found >/dev/null 2>&1 || true
-done
+      kubectl logs -n scanning "${pod_name#pod/}" -c nuclei 2>/dev/null \
+        | sed -n '/===NUCLEI_RESULTS_START===/,/===NUCLEI_RESULTS_END===/{ /===NUCLEI_RESULTS/d; p; }' \
+        | grep '^{' \
+        | jq -s '.' > "$nuclei_report" 2>/dev/null || echo '[]' > "$nuclei_report"
+
+      if [ -s "$nuclei_report" ] && [ "$(cat "$nuclei_report")" != "[]" ]; then
+        count=$(jq 'length' "$nuclei_report" 2>/dev/null || echo "?")
+        log_success "Nuclei found $count findings for $target_short"
+        dd_import "$nuclei_report" "Nuclei Scan" "web,nuclei,$target_short"
+      else
+        log_warning "Nuclei: no findings for $target_short -- check $nuclei_log"
+      fi
+      kubectl delete job "$JOB_NAME" -n scanning --ignore-not-found >/dev/null 2>&1 || true
+    done
+  }
+
+  # Launch harvest in background — Step 5 starts immediately.
+  nuclei_harvest_log=$(mktemp)
+  nuclei_harvest > "$nuclei_harvest_log" 2>&1 &
+  NUCLEI_HARVEST_PID=$!
+  log_info "Nuclei harvest running in background (PID $NUCLEI_HARVEST_PID) — starting Step 5 immediately"
+fi
 
 # ============================================================
 # Step 5: SQLMap / ffuf / XSStrike DAST scans per discovered target
 #
-# Each Phase 2 scanner reads the per-target ConfigMap (sqlmap/xss need
-# param_urls.txt; ffuf fuzzes paths off __TARGET_URL__). Raw output is
-# re-emitted between ===<TOOL>_RESULTS_START=== / ===_END=== markers,
-# pulled via kubectl logs, normalized by scripts/normalize-findings.py
-# into DefectDojo "Generic Findings Import" JSON, then re-imported via
-# the same dd_import() path used by Grype/Nuclei.
+# Performance: scanners within a single target run in parallel.
+# Each subshell buffers its output to a temp file; after all
+# three finish, the buffered logs are printed sequentially.
+# In --quick mode, xss is skipped.
 # ============================================================
 log_info "=== Step 5: SQLMap / ffuf / XSStrike scans ==="
 GENERIC_SCAN_TYPE="Generic Findings Import"
+
+# Launch scanners in parallel (each in a subshell, output buffered) across all targets.
+step5_pids=()
+step5_logs=()
 
 for target_short in "${!TARGETS_CM[@]}"; do
   cm_name="${TARGETS_CM[$target_short]}"
@@ -482,10 +590,6 @@ for target_short in "${!TARGETS_CM[@]}"; do
   log_info "-- target=$target_short (cm=$cm_name, url=$target_url) --"
 
   # Phase 0: skip sqlmap/xss for auth-gated targets (DVWA etc).
-  # Their interesting injection endpoints sit behind a login cookie and
-  # unauthenticated scanning produces 0 findings + wasted minutes.
-  # ffuf + nuclei still run for these targets. Phase A will replace this
-  # check with a per-target `enabled_dast:` field from scanners/targets.yaml.
   dast_disabled=0
   for disabled in "${DAST_DISABLED_TARGETS[@]:-}"; do
     [ "$disabled" = "$target_short" ] && dast_disabled=1
@@ -494,22 +598,51 @@ for target_short in "${!TARGETS_CM[@]}"; do
     log_info "$target_short: skipping sqlmap/xss (auth-gated target, see DAST_DISABLED_TARGETS in scan-all.sh)"
   fi
 
-  # Each scanner is independent -- a single failure must NOT abort the
-  # loop (otherwise a flaky ffuf run also skips sqlmap/xss for the same
-  # target and the rest of the pipeline). `|| true` keeps the for-loop
-  # alive under `set -e`; run_generic_scanner already logs the failure.
+  auth_cookie="${TARGETS_COOKIE[$target_short]:-}"
+
   if [ "$dast_disabled" = "0" ]; then
-    run_generic_scanner sqlmap "$SCANNERS_DIR/sqlmap-job.yaml"  "$target_short" SQLMAP "$GENERIC_SCAN_TYPE" 600 TARGETS_CM="$cm_name" || true
+    tmplog=$(mktemp)
+    step5_logs+=("$tmplog")
+    ( run_generic_scanner sqlmap "$SCANNERS_DIR/sqlmap-job.yaml" "$target_short" SQLMAP "$GENERIC_SCAN_TYPE" 600 TARGETS_CM="$cm_name" COOKIE="$auth_cookie" ) > "$tmplog" 2>&1 &
+    step5_pids+=($!)
   fi
-  run_generic_scanner ffuf   "$SCANNERS_DIR/ffuf-job.yaml"    "$target_short" FFUF   "$GENERIC_SCAN_TYPE" 600 TARGET_URL="$target_url" || true
-  if [ "$dast_disabled" = "0" ]; then
-    run_generic_scanner xss    "$SCANNERS_DIR/xss-job.yaml"    "$target_short" XSS    "$GENERIC_SCAN_TYPE" 600 TARGETS_CM="$cm_name" || true
+
+  tmplog=$(mktemp)
+  step5_logs+=("$tmplog")
+  ( run_generic_scanner ffuf "$SCANNERS_DIR/ffuf-job.yaml" "$target_short" FFUF "$GENERIC_SCAN_TYPE" 600 TARGET_URL="$target_url" ) > "$tmplog" 2>&1 &
+  step5_pids+=($!)
+
+  if [ "$dast_disabled" = "0" ] && [ "$QUICK_MODE" = "0" ]; then
+    tmplog=$(mktemp)
+    step5_logs+=("$tmplog")
+    ( run_generic_scanner xss "$SCANNERS_DIR/xss-job.yaml" "$target_short" XSS "$GENERIC_SCAN_TYPE" 600 TARGETS_CM="$cm_name" COOKIE="$auth_cookie" ) > "$tmplog" 2>&1 &
+    step5_pids+=($!)
   fi
 done
 
+# Wait for all scanners for all targets, then print buffered output.
+for i in "${!step5_pids[@]}"; do
+  wait "${step5_pids[$i]}" || true
+  cat "${step5_logs[$i]}"
+  rm -f "${step5_logs[$i]}"
+done
+
 # ============================================================
-# Step 6: Cleanup -- remove the per-run ConfigMaps (raw URLs persisted
-# in $REPORTS_DIR for forensics, so the CM is no longer needed).
+# Step 5b: Join Nuclei harvest (background from Step 4)
+#
+# If Nuclei harvest is still running, wait for it here. Its output
+# was buffered to a temp file; print it now.
+# ============================================================
+if [ -n "$NUCLEI_HARVEST_PID" ]; then
+  log_info "Waiting for Nuclei harvest to finish (background PID $NUCLEI_HARVEST_PID)..."
+  wait "$NUCLEI_HARVEST_PID" || true
+  log_info "=== Nuclei results (from background harvest) ==="
+  cat "$nuclei_harvest_log" 2>/dev/null || true
+  rm -f "$nuclei_harvest_log"
+fi
+
+# ============================================================
+# Step 6: Cleanup + Status -- remove per-run ConfigMaps, write status CM.
 # ============================================================
 for target_short in "${!TARGETS_CM[@]}"; do
   kubectl delete configmap "${TARGETS_CM[$target_short]}" -n scanning --ignore-not-found >/dev/null 2>&1 || true
@@ -517,13 +650,90 @@ done
 
 # (ZAP scan removed due to high memory consumption on k3d node)
 
-# --- Summary ---
+# --- Summary Table ---
 echo ""
 log_info "========================================================"
-log_success "SCAN PIPELINE COMPLETE!"
+if [ "$QUICK_MODE" = "1" ]; then
+  log_success "SCAN PIPELINE COMPLETE! (quick mode — nuclei + xss skipped)"
+else
+  log_success "SCAN PIPELINE COMPLETE!"
+fi
+DURATION=$((SECONDS - START_TIME))
+log_info "Total execution time: $((DURATION / 60))m $((DURATION % 60))s"
 log_info "========================================================"
+echo ""
+echo "╔══════════════════════╦═══════╦════════╦══════╦════════╦══════╗"
+echo "║ Target               ║ Grype ║ Nuclei ║ ffuf ║ sqlmap ║ xss  ║"
+echo "╠══════════════════════╬═══════╬════════╬══════╬════════╬══════╣"
+
+for target_pair in "${DISCOVERY_TARGETS[@]}"; do
+  ts="${target_pair%%.*}"
+  # Grype uses the container image shortname (juice-shop or web-dvwa)
+  # but for the table we just find the grype file with that target name
+  # substring in it or lookup by known mappings if it doesn't match perfectly.
+  # But since grype filenames are `grype_${IMAGE_SHORT}_$TIMESTAMP.json`:
+  # juice-shop -> juice-shop, dvwa -> web-dvwa
+  if [ "$ts" = "dvwa" ]; then
+      grype_file="$REPORTS_DIR/grype_web-dvwa_${TIMESTAMP}.json"
+  else
+      grype_file="$REPORTS_DIR/grype_${ts}_${TIMESTAMP}.json"
+  fi
+  
+  if [ -s "$grype_file" ]; then
+    g_count=$(jq '.matches | length' "$grype_file" 2>/dev/null || echo "ERR")
+  else
+    g_count="--"
+  fi
+  
+  # Helper to parse standard tool reports
+  get_count() {
+    local t=$1
+    local file="$REPORTS_DIR/${t}_${ts}_${TIMESTAMP}.json"
+    if [ ! -f "$file" ]; then
+      # If the raw log exists but no JSON, it might have timed out or failed parsing
+      local raw="$REPORTS_DIR/${t}_${ts}_${TIMESTAMP}.raw"
+      local txt="$REPORTS_DIR/${t}_${ts}_${TIMESTAMP}.txt" # Some like nuclei don't have .raw but .jsonl
+      if [ -f "$raw" ] || ls "$REPORTS_DIR/${t}_${ts}_${TIMESTAMP}"* >/dev/null 2>&1; then
+        echo "ERR"
+      else
+        echo "SKIP"
+      fi
+    else
+      jq '.findings | length' "$file" 2>/dev/null || jq 'length' "$file" 2>/dev/null || echo "0"
+    fi
+  }
+
+  n_count=$(get_count nuclei)
+  f_count=$(get_count ffuf)
+  s_count=$(get_count sqlmap)
+  x_count=$(get_count xss)
+  
+  # Format with printf for alignment
+  printf "║ %-20s ║ %-5s ║ %-6s ║ %-4s ║ %-6s ║ %-4s ║\n" "$ts" "$g_count" "$n_count" "$f_count" "$s_count" "$x_count"
+done
+echo "╚══════════════════════╩═══════╩════════╩══════╩════════╩══════╝"
+echo ""
+
 log_info "Reports : $REPORTS_DIR"
 log_info "DefectDojo: $DD_URL"
 log_info "========================================================"
 echo ""
 ls -lh "$REPORTS_DIR" 2>/dev/null | grep "$TIMESTAMP" || log_warning "No reports for this run"
+
+# --- Write scan status ConfigMap for n8n dashboard ---
+SCAN_STATUS_JSON=$(cat <<EOJSON
+{
+  "timestamp": "$TIMESTAMP",
+  "duration_seconds": $DURATION,
+  "quick_mode": $( [ "$QUICK_MODE" = "1" ] && echo 'true' || echo 'false' ),
+  "targets": "${DISCOVERY_TARGETS[*]}",
+  "reports_dir": "$REPORTS_DIR",
+  "defectdojo_url": "$DD_URL"
+}
+EOJSON
+)
+kubectl delete configmap voc-scan-status -n scanning --ignore-not-found >/dev/null 2>&1 || true
+kubectl create configmap voc-scan-status -n scanning \
+  --from-literal=status.json="$SCAN_STATUS_JSON" >/dev/null 2>&1 \
+  && log_info "Scan status written to ConfigMap voc-scan-status" \
+  || log_warning "Failed to write scan status ConfigMap"

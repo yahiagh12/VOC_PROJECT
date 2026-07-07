@@ -29,6 +29,10 @@ SENSITIVE_PATH_HINTS = {"admin", "login", "dashboard", "config", "internal", "pr
 FFUF_INTERESTING_STATUS = {200, 201, 204, 301, 302, 303, 307, 308, 401, 403}
 
 DYNAMIC_TOOL = True
+TARGET_BASES = {
+    "juice-shop": "http://juice-shop.targets.svc.cluster.local:3000",
+    "dvwa": "http://dvwa.targets.svc.cluster.local:80",
+}
 SEVERITY_TO_PRIORITY = {
     "Critical": 90,
     "High": 70,
@@ -120,7 +124,7 @@ def normalize_sqlmap(raw_path: Path, target_short: str) -> list[dict]:
                 ),
                 "param": param,
                 "endpoints": [
-                    "http://juice-shop.targets.svc.cluster.local:3000"
+                    f"{TARGET_BASES.get(target_short, f'http://{target_short}.targets.svc.cluster.local')}"
                     f"/rest/products/search?q={param}"
                 ],
                 "tags": tags_with_priority(severity, "sqlmap", target_short),
@@ -152,7 +156,7 @@ def normalize_sqlmap(raw_path: Path, target_short: str) -> list[dict]:
                 "cwe": 89,
                 "param": param,
                 "endpoints": [
-                    "http://juice-shop.targets.svc.cluster.local:3000"
+                    f"{TARGET_BASES.get(target_short, f'http://{target_short}.targets.svc.cluster.local')}"
                     f"/rest/products/search?q={param}"
                 ],
                 "tags": tags_with_priority(sev, "sqlmap", target_short),
@@ -176,7 +180,7 @@ def normalize_ffuf(raw_path: Path, target_short: str) -> list[dict]:
     if not isinstance(results, list):
         return []
 
-    base = "http://juice-shop.targets.svc.cluster.local:3000"
+    base = TARGET_BASES.get(target_short, f"http://{target_short}.targets.svc.cluster.local")
     findings: list[dict] = []
     for r in results:
         try:
@@ -296,7 +300,7 @@ def normalize_xss(raw_path: Path, target_short: str) -> list[dict]:
     current_param: str | None = None
     current_target: str | None = None
     pending: dict | None = None  # in-progress finding awaiting Eff/Conf
-    base = "http://juice-shop.targets.svc.cluster.local:3000"
+    base = TARGET_BASES.get(target_short, f"http://{target_short}.targets.svc.cluster.local")
 
     def flush(p: dict | None):
         if p is None:
@@ -386,7 +390,7 @@ def normalize_crawler(raw_path: Path, target_short: str) -> list[dict]:
         for line in raw_path.read_text(errors="replace").splitlines()
         if line.strip()
     ]
-    base = "http://juice-shop.targets.svc.cluster.local:3000"
+    base = TARGET_BASES.get(target_short, f"http://{target_short}.targets.svc.cluster.local")
     findings: list[dict] = []
     for idx, u in enumerate(urls):
         endpoint = u if u.startswith("http") else f"{base}{u if u.startswith('/') else '/' + u}"

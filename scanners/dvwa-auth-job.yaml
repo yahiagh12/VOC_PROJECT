@@ -1,0 +1,89 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: scanning
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: auth
+          # Re-using an image we know is cached in k3d
+          image: parrotsec/sqlmap:7.1
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-c"]
+          args:
+            - |
+              import urllib.request
+              import urllib.parse
+              import re
+              import sys
+
+              url = "__TARGET_URL__/login.php"
+              try:
+                  # Step 1: GET login page - manually capture Set-Cookie (avoids port-based domain mismatch in CookieJar)
+                  req1 = urllib.request.Request(url)
+                  with urllib.request.urlopen(req1) as response:
+                      html = response.read().decode('utf-8')
+                      set_cookie = response.getheader('Set-Cookie', '')
+
+                  # Extract user_token (CSRF)
+                  m = re.search(r"name='user_token' value='([^']+)'", html)
+                  if not m:
+                      print("Could not find user_token", file=sys.stderr)
+                      sys.exit(1)
+                  token = m.group(1)
+
+                  # Extract PHPSESSID from the GET response Set-Cookie header
+                  m2 = re.search(r'PHPSESSID=([^;,\s]+)', set_cookie)
+                  if not m2:
+                      print("Could not find PHPSESSID in Set-Cookie", file=sys.stderr)
+                      sys.exit(1)
+                  phpsessid = m2.group(1)
+
+                  # Step 2: POST login - send PHPSESSID explicitly so DVWA can match the user_token
+                  data = urllib.parse.urlencode({
+                      'username': 'admin',
+                      'password': 'password',
+                      'Login': 'Login',
+                      'user_token': token
+                  }).encode('utf-8')
+
+                  req2 = urllib.request.Request(url, data=data, method='POST',
+                                                headers={'Cookie': f'PHPSESSID={phpsessid}; security=low'})
+
+                  # Don't follow the 302 redirect - we just need the new Set-Cookie
+                  class NoRedirect(urllib.request.HTTPRedirectHandler):
+                      def http_error_302(self, req, fp, code, msg, hdrs):
+                          return fp
+                      http_error_301 = http_error_303 = http_error_307 = http_error_302
+
+                  no_redir_opener = urllib.request.build_opener(NoRedirect)
+                  with no_redir_opener.open(req2) as r2:
+                      set_cookie2 = r2.getheader('Set-Cookie', '')
+                      location = r2.getheader('Location', '')
+
+                  # On successful login DVWA issues a 302 to index.php and may regenerate PHPSESSID
+                  m3 = re.search(r'PHPSESSID=([^;,\s]+)', set_cookie2)
+                  if m3:
+                      phpsessid = m3.group(1)
+
+                  if 'index.php' not in location and 'login.php' not in location:
+                      # Fallback: the opener followed the redirect (no 302 captured) - PHPSESSID from GET is still valid
+                      pass
+                  elif 'login.php' in location:
+                      print("Login failed - check credentials or user_token", file=sys.stderr)
+                      sys.exit(1)
+
+                  print("===AUTH_RESULTS_START===")
+                  print(f"PHPSESSID={phpsessid}; security=low")
+                  print("===AUTH_RESULTS_END===")
+              except Exception as e:
+                  print("Error:", e, file=sys.stderr)
+                  sys.exit(1)
+          resources:
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
