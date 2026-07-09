@@ -167,7 +167,7 @@ voc_prepull() {
     "projectdiscovery/katana:v1.6.1"
     "parrotsec/sqlmap:7.1"
     "parrotsec/ffuf:7.1"
-    "anchore/grype:v0.115.0"
+    "anchore/grype:v0.115.0-debug"
     "nenadzaric/gospider:a4244c8"
     "femtopixel/xsstrike:3.1.6"
   )

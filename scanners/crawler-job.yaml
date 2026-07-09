@@ -39,5 +39,5 @@ spec:
               mountPath: /work
           resources:
             limits:
-              memory: "512Mi"
-              cpu: "1"
+              memory: "128Mi"
+              cpu: "100m"

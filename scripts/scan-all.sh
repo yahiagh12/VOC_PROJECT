@@ -169,6 +169,11 @@ wait_for_job() {
   local elapsed=0 interval=5
 
   while [ "$elapsed" -lt "$timeout_sec" ]; do
+    # Check if job still exists. If it was deleted (e.g. by ttlSecondsAfterFinished), stop waiting.
+    if ! kubectl get job "$job_name" -n "$namespace" >/dev/null 2>&1; then
+      log_warning "Job $job_name not found in namespace $namespace. Stopping wait."
+      return 1
+    fi
     if kubectl wait --for=condition=complete "job/$job_name" -n "$namespace" --timeout=0s 2>/dev/null; then
       return 0
     fi
@@ -308,6 +313,9 @@ else
   log_error "Cannot reach DefectDojo API (HTTP $DD_HTTP). Is port-forward running on 8080?"
   exit 1
 fi
+
+# Ensure ffuf wordlist ConfigMap is applied to the scanning namespace
+kubectl apply -f "$SCANNERS_DIR/ffuf-wordlist-cm.yaml" >/dev/null 2>&1 || log_warning "Failed to apply ffuf-wordlist configmap"
 
 # --- Step 1: Check targets are running ---
 log_info "=== Step 1: Checking scan targets ==="

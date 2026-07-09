@@ -17,14 +17,14 @@ spec:
       restartPolicy: Never
       containers:
         - name: grype
-          image: anchore/grype:v0.115.0
+          image: anchore/grype:v0.115.0-debug
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c"]
+          command: ["sh", "-c"]
           args:
             - |
               set -e
               echo "Scanning image: __TARGET_IMAGE__"
-              grype "__TARGET_IMAGE__" -o json > /work/grype.json
+              /grype "__TARGET_IMAGE__" -o json > /work/grype.json
               echo "===GRYPE_RESULTS_START==="
               cat /work/grype.json 2>/dev/null || true
               echo "===GRYPE_RESULTS_END==="
@@ -32,9 +32,12 @@ spec:
             - name: work
               mountPath: /work
           resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
             limits:
-              memory: "1024Mi"
               cpu: "1"
+              memory: "1024Mi"
       volumes:
         - name: work
           emptyDir: {}
