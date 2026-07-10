@@ -20,7 +20,7 @@ cat <<'BANNER'
 ║  voc-down       Delete k3d cluster                       ║
 ║  voc-status     Show cluster status                      ║
 ║  voc-deploy     Deploy components (ns/dd/n8n/th/targets) ║
-║  voc-scan       Run scan pipeline (Grype+Nuclei+ZAP)     ║
+║  voc-scan       Run scan pipeline (Grype+Nuclei)         ║
 ║  voc-forward    Port-forward a service                   ║
 ║  voc-logs       Get pod logs                             ║
 ║  voc-help       Show all commands                        ║

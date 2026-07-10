@@ -47,43 +47,56 @@ def run_scoring_pass() -> dict:
             log.info("Loaded %d active findings from DefectDojo", len(findings))
 
             cve_to_fids: dict[str, list[int]] = {}
+            non_cve_fids: list[int] = []
             for f in findings:
                 cve = extract_cve(f)
-                if not cve:
+                cvss = f.get("cvssv3_score") or f.get("cvssv2_score")
+                if cve:
+                    cve_to_fids.setdefault(cve, []).append(f["id"])
+                elif cvss is not None:
+                    non_cve_fids.append(f["id"])
+                else:
                     skipped += 1
-                    continue
-                cve_to_fids.setdefault(cve, []).append(f["id"])
 
-            if not cve_to_fids:
-                log.info("No CVE-backed findings to score")
+            if not cve_to_fids and not non_cve_fids:
+                log.info("No findings to score (no CVE and no CVSS)")
             else:
-                epss = fetch_epss_bulk(cve_to_fids.keys(), settings.epss_api_url)
+                epss = {}
+                if cve_to_fids:
+                    epss = fetch_epss_bulk(cve_to_fids.keys(), settings.epss_api_url)
+
+                to_score: list[tuple[int, str | None, float | None]] = []
                 for cve, fids in cve_to_fids.items():
                     entry = epss.get(cve)
                     percentile = entry["percentile"] if entry else None
                     for fid in fids:
-                        src = next((x for x in findings if x["id"] == fid), {})
-                        cvss = src.get("cvssv3_score") or src.get("cvssv2_score")
-                        priority, note = compute_priority(
-                            cvss,
-                            percentile,
-                            cvss_weight=settings.cvss_weight,
-                            epss_weight=settings.epss_weight,
+                        to_score.append((fid, cve, percentile))
+                for fid in non_cve_fids:
+                    to_score.append((fid, None, None))
+
+                for fid, cve, percentile in to_score:
+                    src = next((x for x in findings if x["id"] == fid), {})
+                    cvss = src.get("cvssv3_score") or src.get("cvssv2_score")
+                    priority, note = compute_priority(
+                        cvss,
+                        percentile,
+                        cvss_weight=settings.cvss_weight,
+                        epss_weight=settings.epss_weight,
+                    )
+                    try:
+                        dd.set_priority(
+                            fid,
+                            priority,
+                            existing_tags=src.get("tags") or [],
                         )
-                        try:
-                            dd.set_priority(
-                                fid,
-                                priority,
-                                existing_tags=src.get("tags") or [],
-                            )
-                            scored += 1
-                            log.debug(
-                                "finding=%s cve=%s priority=%d band=%s (%s)",
-                                fid, cve, priority, priority_band(priority), note,
-                            )
-                        except Exception as exc:
-                            errors += 1
-                            log.warning("failed to update finding %s: %s", fid, exc)
+                        scored += 1
+                        log.debug(
+                            "finding=%s cve=%s priority=%d band=%s (%s)",
+                            fid, cve or "none", priority, priority_band(priority), note,
+                        )
+                    except Exception as exc:
+                        errors += 1
+                        log.warning("failed to update finding %s: %s", fid, exc)
     finally:
         state["running"] = False
 
@@ -105,7 +118,7 @@ async def lifespan(_app: FastAPI):
         async def loop():
             while True:
                 try:
-                    run_scoring_pass()
+                    await asyncio.to_thread(run_scoring_pass)
                 except HTTPException:
                     pass
                 except Exception as exc:

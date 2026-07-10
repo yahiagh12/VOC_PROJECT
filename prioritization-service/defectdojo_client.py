@@ -62,7 +62,7 @@ class DefectDojoClient:
         verified: bool | None = None,
         limit: int = 200,
     ) -> Iterator[dict]:
-        params: dict[str, Any] = {"limit": limit, "o": "false"}
+        params: dict[str, Any] = {"limit": limit}
         if active:
             params["active"] = "true"
         if verified is not None:

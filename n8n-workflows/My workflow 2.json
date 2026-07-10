@@ -11,7 +11,7 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -496,
+        -740,
         -272
       ],
       "id": "618ea86f-fadc-4cf0-8eb3-745427beb01a",
@@ -20,17 +20,23 @@
     },
     {
       "parameters": {
-        "url": "http://dvwa.targets.svc.cluster.local:80",
-        "options": {}
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
       },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.4,
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
       "position": [
-        -32,
-        -272
+        -740,
+        -112
       ],
-      "id": "6bbc3d96-17f4-42ce-ac79-c7c45e77e584",
-      "name": "Check DVWA"
+      "id": "sched-daily-trigger",
+      "name": "Schedule Trigger"
     },
     {
       "parameters": {
@@ -40,11 +46,38 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        -240,
+        -496,
         -272
       ],
       "id": "0f75b8ba-0ffa-43ce-8827-0ab3c0c53438",
       "name": "Check Juice Shop"
+    },
+    {
+      "parameters": {
+        "url": "http://dvwa.targets.svc.cluster.local:80",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -288,
+        -272
+      ],
+      "id": "6bbc3d96-17f4-42ce-ac79-c7c45e77e584",
+      "name": "Check DVWA"
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $input.first()?.json?.headers ? \"webhook\" : \"schedule\";\nreturn [{ json: { triggerSource: source, startedAt: new Date().toISOString(), quickMode: \"0\" } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        -272
+      ],
+      "id": "set-scan-mode-node",
+      "name": "Set Scan Mode"
     },
     {
       "parameters": {
@@ -65,7 +98,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "{\n  \"apiVersion\": \"batch/v1\",\n  \"kind\": \"Job\",\n  \"metadata\": {\n    \"generateName\": \"scan-orchestrator-\",\n    \"namespace\": \"scanning\",\n    \"labels\": {\n      \"app\": \"voc-orchestrator\",\n      \"voc.project/triggered-by\": \"n8n\"\n    }\n  },\n  \"spec\": {\n    \"ttlSecondsAfterFinished\": 600,\n    \"backoffLimit\": 1,\n    \"template\": {\n      \"spec\": {\n        \"serviceAccountName\": \"scan-orchestrator\",\n        \"restartPolicy\": \"Never\",\n        \"containers\": [\n          {\n            \"name\": \"orchestrator\",\n            \"image\": \"voc:latest\",\n            \"imagePullPolicy\": \"Never\",\n            \"command\": [\"/workspace/scripts/scan-all.sh\"]\n          }\n        ]\n      }\n    }\n  }\n}\n",
+        "jsonBody": "{\"apiVersion\": \"batch/v1\", \"kind\": \"Job\", \"metadata\": {\"generateName\": \"scan-orchestrator-\", \"namespace\": \"scanning\", \"labels\": {\"app\": \"voc-orchestrator\", \"voc.project/triggered-by\": \"n8n\"}}, \"spec\": {\"ttlSecondsAfterFinished\": 600, \"backoffLimit\": 1, \"template\": {\"spec\": {\"serviceAccountName\": \"scan-orchestrator\", \"restartPolicy\": \"Never\", \"containers\": [{\"name\": \"orchestrator\", \"image\": \"voc-orchestrator:latest\", \"imagePullPolicy\": \"Never\"}]}}}}",
         "options": {
           "allowUnauthorizedCerts": true
         }
@@ -73,7 +106,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        176,
+        128,
         -272
       ],
       "id": "0ea5483e-b7a0-445c-8998-5238e0c0eaa5",
@@ -81,7 +114,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const jobName = $input.first().json?.metadata?.name || 'unknown';\nconst namespace = 'scanning';\nconst startedAt = new Date().toISOString();\n\nreturn [{\n  json: {\n    jobName,\n    namespace,\n    startedAt,\n    status: 'Running',\n    pollCount: 0,\n    maxPolls: 120 // 120 polls * 15s = 30 minutes max wait\n  }\n}];\n"
+        "jsCode": "const jobName = $input.first().json?.metadata?.name || \"unknown\";\nconst namespace = \"scanning\";\nconst startedAt = new Date().toISOString();\nreturn [{ json: { jobName, namespace, startedAt, status: \"Running\", pollCount: 0, maxPolls: 120 } }];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -119,7 +152,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const job = $input.first().json;\nconst conditions = job?.status?.conditions || [];\n// Retrieve previous pollCount and job info from either the first setup or the loop wait node\nconst prevData = $('Extract Job Name').first()?.json || $('Wait 15s').first()?.json || {};\n\nlet status = 'Running';\nlet done = false;\n\nfor (const c of conditions) {\n  if (c.type === 'Complete' && c.status === 'True') {\n    status = 'Complete';\n    done = true;\n    break;\n  }\n  if (c.type === 'Failed' && c.status === 'True') {\n    status = 'Failed';\n    done = true;\n    break;\n  }\n}\n\nconst pollCount = (prevData.pollCount || 0) + 1;\nif (pollCount >= (prevData.maxPolls || 120)) {\n  status = 'Timeout';\n  done = true;\n}\n\nreturn [{\n  json: {\n    jobName: prevData.jobName || job?.metadata?.name,\n    namespace: prevData.namespace || 'scanning',\n    status,\n    done,\n    pollCount,\n    maxPolls: prevData.maxPolls || 120\n  }\n}];\n"
+        "jsCode": "const job = $input.first().json;\nconst conditions = job?.status?.conditions || [];\n// FIX: was referencing nonexistent node \"Wait 15s\" - correct name is \"Wait\"\nconst prevData = $(\"Extract Job Name\").first()?.json || $(\"Wait\").first()?.json || {};\nlet status = \"Running\";\nlet done = false;\nfor (const c of conditions) {\n  if (c.type === \"Complete\" && c.status === \"True\") { status = \"Complete\"; done = true; break; }\n  if (c.type === \"Failed\" && c.status === \"True\") { status = \"Failed\"; done = true; break; }\n}\nconst pollCount = (prevData.pollCount || 0) + 1;\nif (pollCount >= (prevData.maxPolls || 120)) { status = \"Timeout\"; done = true; }\nreturn [{ json: { jobName: prevData.jobName || job?.metadata?.name, namespace: prevData.namespace || \"scanning\", startedAt: prevData.startedAt, status, done, pollCount, maxPolls: prevData.maxPolls || 120 } }];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -162,7 +195,7 @@
         -32
       ],
       "id": "f3388454-84de-44f3-aa05-d50366d07e05",
-      "name": "If"
+      "name": "Job Done?"
     },
     {
       "parameters": {
@@ -177,11 +210,200 @@
       "id": "80f37fff-29c7-4221-a3e5-5e3cfe002718",
       "name": "Wait",
       "webhookId": "b9006e29-0c20-4c23-adf6-357706cc1f5f"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "scan-success-cond-01",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "Complete",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        336,
+        -32
+      ],
+      "id": "scan-succeeded-node",
+      "name": "Scan Succeeded?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://prioritization-service.voc-core.svc.cluster.local:8000/score",
+        "options": {
+          "timeout": 3600000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        544,
+        -112
+      ],
+      "id": "prio-service-node",
+      "name": "prioritization service"
+    },
+    {
+      "parameters": {
+        "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/findings/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Token {{ $env.DD_API_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "active",
+              "value": "true"
+            },
+            {
+              "name": "limit",
+              "value": "500"
+            },
+            {
+              "name": "o",
+              "value": "-updated"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        752,
+        -112
+      ],
+      "id": "get-dd-findings-node",
+      "name": "Get DefectDojo Findings"
+    },
+    {
+      "parameters": {
+        "jsCode": "const findings = $input.first().json?.results || [];\nconst jobData = $(\"Check Job Status\").first()?.json || {};\nconst byPriority = { critical: 0, high: 0, medium: 0, low: 0, unscored: 0 };\nconst bySeverity = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };\nconst topFindings = [];\nfor (const f of findings) {\n  const sev = f.severity || \"Info\";\n  bySeverity[sev] = (bySeverity[sev] || 0) + 1;\n  const tags = (f.tags || []).map(t => String(t));\n  const pTag = tags.find(t => t.startsWith(\"priority-\"));\n  if (pTag) {\n    const score = parseInt(pTag.split(\"-\")[1], 10);\n    if (score >= 80) { byPriority.critical++; topFindings.push({ severity: f.severity, title: f.title, score }); }\n    else if (score >= 60) { byPriority.high++; topFindings.push({ severity: f.severity, title: f.title, score }); }\n    else if (score >= 40) { byPriority.medium++; }\n    else { byPriority.low++; }\n  } else { byPriority.unscored++; }\n}\ntopFindings.sort((a, b) => b.score - a.score);\nconst sampleLines = topFindings.slice(0, 5).map(f => `[${f.severity}] ${f.title} (score: ${f.score})`).join(\"\\n\");\nconst body = `The automated security pipeline has finished scanning your cluster targets and run the prioritization scoring model.\\n\\nTotal Active Findings in DefectDojo: ${findings.length}\\n\\nPriority Alert Breakdown:\\n  Critical Action (Score >= 80): ${byPriority.critical}\\n  High Priority  (Score 60-79):  ${byPriority.high}\\n  Medium Priority (Score 40-59): ${byPriority.medium}\\n  Low Priority   (Score < 40):   ${byPriority.low}\\n  Unscored (no CVE/CVSS data):   ${byPriority.unscored}\\n\\nSeverity Breakdown:\\n  Critical: ${bySeverity.Critical}\\n  High:     ${bySeverity.High}\\n  Medium:   ${bySeverity.Medium}\\n  Low:      ${bySeverity.Low}\\n  Info:     ${bySeverity.Info}\\n\\nHigh-Priority Vulnerabilities Sample:\\n${sampleLines || \"None\"}\\n\\nScan started:     ${jobData.startedAt || \"N/A\"}\\nReport generated: ${new Date().toISOString()}`;\nreturn [{ json: { body, total: findings.length, byPriority, bySeverity } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -112
+      ],
+      "id": "format-summary-node",
+      "name": "Format Summary"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.ALERT_EMAIL || \"admin@voc.local\" }}",
+        "subject": "=VOC Security Scan Report — {{ new Date().toISOString().slice(0,10) }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1168,
+        -112
+      ],
+      "id": "send-email-node",
+      "name": "Send an Email"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://kubernetes.default.svc/apis/batch/v1/namespaces/scanning/jobs/{{ $(\"Check Job Status\").first().json.jobName }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.K8S_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "ignoreResponseCode": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1376,
+        -112
+      ],
+      "id": "delete-job-node",
+      "name": "Delete Orchestrator Job"
+    },
+    {
+      "parameters": {
+        "jsCode": "const jobData = $(\"Check Job Status\").first()?.json || {};\nreturn [{ json: { body: `VOC scan pipeline encountered an error.\\n\\nJob:     ${jobData.jobName || \"unknown\"}\\nStatus:  ${jobData.status || \"unknown\"}\\nPolls:   ${jobData.pollCount || 0}\\nStarted: ${jobData.startedAt || \"N/A\"}\\n\\nCheck the n8n execution log and kubectl logs in namespace \"scanning\" for details.` } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        80
+      ],
+      "id": "error-report-node",
+      "name": "Error Report"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.ALERT_EMAIL || \"admin@voc.local\" }}",
+        "subject": "=VOC Scan FAILED — {{ new Date().toISOString().slice(0,10) }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        752,
+        80
+      ],
+      "id": "send-error-email-node",
+      "name": "Send an Email1"
     }
   ],
-  "pinData": {},
   "connections": {
     "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check Juice Shop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
       "main": [
         [
           {
@@ -204,6 +426,17 @@
       ]
     },
     "Check DVWA": {
+      "main": [
+        [
+          {
+            "node": "Set Scan Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Scan Mode": {
       "main": [
         [
           {
@@ -251,16 +484,22 @@
       "main": [
         [
           {
-            "node": "If",
+            "node": "Job Done?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "If": {
+    "Job Done?": {
       "main": [
-        [],
+        [
+          {
+            "node": "Scan Succeeded?",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Wait",
@@ -274,7 +513,80 @@
       "main": [
         [
           {
-            "node": "Check Job Status",
+            "node": "Poll Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan Succeeded?": {
+      "main": [
+        [
+          {
+            "node": "prioritization service",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "prioritization service": {
+      "main": [
+        [
+          {
+            "node": "Get DefectDojo Findings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get DefectDojo Findings": {
+      "main": [
+        [
+          {
+            "node": "Format Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Summary": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email": {
+      "main": [
+        [
+          {
+            "node": "Delete Orchestrator Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Report": {
+      "main": [
+        [
+          {
+            "node": "Send an Email1",
             "type": "main",
             "index": 0
           }

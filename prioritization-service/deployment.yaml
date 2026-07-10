@@ -14,20 +14,6 @@ data:
   SCORING_INTERVAL_SECONDS: "3600"
   LOG_LEVEL: "INFO"
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: prioritization-secrets
-  namespace: voc-core
-  annotations:
-    voc.project/note: "Auto-populated by voc-deploy prio or run-all.sh"
-type: Opaque
-stringData:
-  # This gets overwritten by the deploy script with the real DD API key.
-  # If you see 403s from the prioritization service, re-run:
-  #   voc-deploy prio
-  DEFECTDOJO_API_KEY: "changeme"
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
