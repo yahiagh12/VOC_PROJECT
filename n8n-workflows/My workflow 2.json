@@ -1,0 +1,298 @@
+{
+  "name": "My workflow 2",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voc/scan/trigger",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -496,
+        -272
+      ],
+      "id": "618ea86f-fadc-4cf0-8eb3-745427beb01a",
+      "name": "Webhook",
+      "webhookId": "029eefab-c325-45dd-8ccb-05069eec20b1"
+    },
+    {
+      "parameters": {
+        "url": "http://dvwa.targets.svc.cluster.local:80",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -32,
+        -272
+      ],
+      "id": "6bbc3d96-17f4-42ce-ac79-c7c45e77e584",
+      "name": "Check DVWA"
+    },
+    {
+      "parameters": {
+        "url": "http://juice-shop.targets.svc.cluster.local:3000",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -240,
+        -272
+      ],
+      "id": "0f75b8ba-0ffa-43ce-8827-0ab3c0c53438",
+      "name": "Check Juice Shop"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://kubernetes.default.svc/apis/batch/v1/namespaces/scanning/jobs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.K8S_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"apiVersion\": \"batch/v1\",\n  \"kind\": \"Job\",\n  \"metadata\": {\n    \"generateName\": \"scan-orchestrator-\",\n    \"namespace\": \"scanning\",\n    \"labels\": {\n      \"app\": \"voc-orchestrator\",\n      \"voc.project/triggered-by\": \"n8n\"\n    }\n  },\n  \"spec\": {\n    \"ttlSecondsAfterFinished\": 600,\n    \"backoffLimit\": 1,\n    \"template\": {\n      \"spec\": {\n        \"serviceAccountName\": \"scan-orchestrator\",\n        \"restartPolicy\": \"Never\",\n        \"containers\": [\n          {\n            \"name\": \"orchestrator\",\n            \"image\": \"voc:latest\",\n            \"imagePullPolicy\": \"Never\",\n            \"command\": [\"/workspace/scripts/scan-all.sh\"]\n          }\n        ]\n      }\n    }\n  }\n}\n",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        176,
+        -272
+      ],
+      "id": "0ea5483e-b7a0-445c-8998-5238e0c0eaa5",
+      "name": "Create Scan Job"
+    },
+    {
+      "parameters": {
+        "jsCode": "const jobName = $input.first().json?.metadata?.name || 'unknown';\nconst namespace = 'scanning';\nconst startedAt = new Date().toISOString();\n\nreturn [{\n  json: {\n    jobName,\n    namespace,\n    startedAt,\n    status: 'Running',\n    pollCount: 0,\n    maxPolls: 120 // 120 polls * 15s = 30 minutes max wait\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        -32
+      ],
+      "id": "a18bfc5b-b2b5-49fa-904e-af19762d04f9",
+      "name": "Extract Job Name"
+    },
+    {
+      "parameters": {
+        "url": "=https://kubernetes.default.svc/apis/batch/v1/namespaces/scanning/jobs/{{ $json.jobName }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.K8S_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -256,
+        -32
+      ],
+      "id": "88f952b0-48da-4be0-88c7-cdd59b599ec0",
+      "name": "Poll Job Status"
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $input.first().json;\nconst conditions = job?.status?.conditions || [];\n// Retrieve previous pollCount and job info from either the first setup or the loop wait node\nconst prevData = $('Extract Job Name').first()?.json || $('Wait 15s').first()?.json || {};\n\nlet status = 'Running';\nlet done = false;\n\nfor (const c of conditions) {\n  if (c.type === 'Complete' && c.status === 'True') {\n    status = 'Complete';\n    done = true;\n    break;\n  }\n  if (c.type === 'Failed' && c.status === 'True') {\n    status = 'Failed';\n    done = true;\n    break;\n  }\n}\n\nconst pollCount = (prevData.pollCount || 0) + 1;\nif (pollCount >= (prevData.maxPolls || 120)) {\n  status = 'Timeout';\n  done = true;\n}\n\nreturn [{\n  json: {\n    jobName: prevData.jobName || job?.metadata?.name,\n    namespace: prevData.namespace || 'scanning',\n    status,\n    done,\n    pollCount,\n    maxPolls: prevData.maxPolls || 120\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        -32
+      ],
+      "id": "7819c10e-c890-4810-9ad5-fcd3c214c9db",
+      "name": "Check Job Status"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e9d673af-d073-47aa-be3c-fedd88fce028",
+              "leftValue": "={{ $json.done }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        128,
+        -32
+      ],
+      "id": "f3388454-84de-44f3-aa05-d50366d07e05",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        128,
+        144
+      ],
+      "id": "80f37fff-29c7-4221-a3e5-5e3cfe002718",
+      "name": "Wait",
+      "webhookId": "b9006e29-0c20-4c23-adf6-357706cc1f5f"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check Juice Shop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Juice Shop": {
+      "main": [
+        [
+          {
+            "node": "Check DVWA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check DVWA": {
+      "main": [
+        [
+          {
+            "node": "Create Scan Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Scan Job": {
+      "main": [
+        [
+          {
+            "node": "Extract Job Name",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Job Name": {
+      "main": [
+        [
+          {
+            "node": "Poll Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll Job Status": {
+      "main": [
+        [
+          {
+            "node": "Check Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Job Status": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Check Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "f3f08e87-bf50-4f64-9236-a12751712f11",
+  "meta": {
+    "instanceId": "74d46b197de23fb67185c490deee3b381242a1350f479aba48b3b90c0dacab5c"
+  },
+  "nodeGroups": [],
+  "id": "EH8WCM73GUNkzt07",
+  "tags": []
+}

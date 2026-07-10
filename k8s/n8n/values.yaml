@@ -54,3 +54,10 @@ extraEnv:
       secretKeyRef:
         name: n8n-token
         key: token
+  - name: DD_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: defectdojo-creds
+        key: api-key
+        optional: true
+

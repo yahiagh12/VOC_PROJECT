@@ -33,3 +33,28 @@ roleRef:
   kind: Role
   name: scan-orchestrator-role
   apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scan-orchestrator-targets-role
+  namespace: targets
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scan-orchestrator-targets-binding
+  namespace: targets
+subjects:
+  - kind: ServiceAccount
+    name: scan-orchestrator
+    namespace: scanning
+roleRef:
+  kind: Role
+  name: scan-orchestrator-targets-role
+  apiGroup: rbac.authorization.k8s.io

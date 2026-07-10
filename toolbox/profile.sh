@@ -86,6 +86,10 @@ voc_deploy() {
         --from-literal=url=http://defectdojo-django.voc-core.svc.cluster.local \
         --from-literal=api-key="${DD_API_KEY:-changeme}" \
         --dry-run=client -o yaml | kubectl apply -f -
+      kubectl -n voc-core create secret generic defectdojo-creds \
+        --from-literal=url=http://defectdojo-django.voc-core.svc.cluster.local \
+        --from-literal=api-key="${DD_API_KEY:-changeme}" \
+        --dry-run=client -o yaml | kubectl apply -f -
       for f in "$REPO_DIR/scanners/"*.yaml; do
         if ! grep -q "__JOB_NAME__" "$f"; then
           kubectl apply -f "$f" || true
