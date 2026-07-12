@@ -12,85 +12,244 @@
       }
     ]
   },
-  "description": "VOC dashboard scaffold. PromQL-sourced panels are placeholders; DefectDojo-sourced panels need a metrics exporter (TBD: small exporter or direct Postgres queries via a Grafana datasource).",
+  "description": "VOC vulnerability management dashboard. Sourced from voc-metrics-exporter polling DefectDojo.",
   "editable": true,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "panels": [
     {
       "datasource": "${DS_PROM}",
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "orange", "value": 50 },
+              { "color": "red", "value": 100 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
       "id": 1,
       "options": {
-        "content": "### Open vulnerabilities by severity over time\n\nNeeds a DefectDojo metrics exporter. Placeholder panel.\n\nTODO: replace with a timeseries querying `voc_findings_open{severity=\"Critical|High|Medium|Low\"}` once the exporter exists.",
-        "mode": "markdown"
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
       },
-      "title": "Open Vulns by Severity (TBD)",
-      "type": "text"
+      "targets": [
+        {
+          "expr": "voc_findings_total",
+          "legendFormat": "Total",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Open Findings",
+      "type": "stat"
     },
     {
       "datasource": "${DS_PROM}",
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
       "id": 2,
       "options": {
-        "content": "### Mean Time To Remediate (MTTR)\n\nPlaceholder. Query will be `avg(voc_finding_mttr_seconds)` once exporter exists.",
-        "mode": "markdown"
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
       },
-      "title": "MTTR (TBD)",
-      "type": "text"
+      "targets": [
+        {
+          "expr": "voc_findings_critical_high",
+          "legendFormat": "Critical + High",
+          "refId": "A"
+        }
+      ],
+      "title": "Critical + High Findings",
+      "type": "stat"
     },
     {
       "datasource": "${DS_PROM}",
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "d",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 7 },
+              { "color": "red", "value": 30 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
       "id": 3,
       "options": {
-        "content": "### SLA breach count\n\nPlaceholder. Query will be `voc_findings_sla_breached` once exporter exists.",
-        "mode": "markdown"
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
       },
-      "title": "SLA Breaches (TBD)",
-      "type": "text"
+      "targets": [
+        {
+          "expr": "voc_findings_mttr_days",
+          "legendFormat": "MTTR",
+          "refId": "A"
+        }
+      ],
+      "title": "MTTR (days, 30d window)",
+      "type": "stat"
     },
     {
       "datasource": "${DS_PROM}",
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "s",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 600 },
+              { "color": "red", "value": 1200 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
       "id": 4,
       "options": {
-        "content": "### Top vulnerable assets\n\nPlaceholder. Table panel querying `topk(10, voc_findings_open_by_asset)`.",
-        "mode": "markdown"
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
       },
-      "title": "Top Vulnerable Assets (TBD)",
-      "type": "text"
+      "targets": [
+        {
+          "expr": "voc_scan_last_duration_seconds",
+          "legendFormat": "Last Scan",
+          "refId": "A"
+        }
+      ],
+      "title": "Last Scan Duration",
+      "type": "stat"
     },
     {
       "datasource": "${DS_PROM}",
-      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 6 },
-      "id": 5,
-      "options": {
-        "content": "### Scan coverage (% assets scanned in last 7 days)\n\nPlaceholder. Query will be `voc_scan_coverage_ratio * 100`.",
-        "mode": "markdown"
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Findings",
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44" } }] },
+          { "matcher": { "id": "byName", "options": "High" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830" } }] },
+          { "matcher": { "id": "byName", "options": "Medium" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A" } }] },
+          { "matcher": { "id": "byName", "options": "Low" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69" } }] },
+          { "matcher": { "id": "byName", "options": "Info" }, "properties": [{ "id": "color", "value": { "fixedColor": "#5794F2" } }] }
+        ]
       },
-      "title": "Scan Coverage (TBD)",
-      "type": "text"
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "id": 5,
+      "targets": [
+        { "expr": "voc_findings_by_severity{severity=\"Critical\"}", "legendFormat": "Critical", "refId": "A" },
+        { "expr": "voc_findings_by_severity{severity=\"High\"}", "legendFormat": "High", "refId": "B" },
+        { "expr": "voc_findings_by_severity{severity=\"Medium\"}", "legendFormat": "Medium", "refId": "C" },
+        { "expr": "voc_findings_by_severity{severity=\"Low\"}", "legendFormat": "Low", "refId": "D" },
+        { "expr": "voc_findings_by_severity{severity=\"Info\"}", "legendFormat": "Info", "refId": "E" }
+      ],
+      "title": "Open Findings by Severity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Findings",
+            "drawStyle": "bars",
+            "fillOpacity": 80
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "id": 6,
+      "targets": [
+        { "expr": "voc_findings_by_scanner", "legendFormat": "{{scanner}}", "refId": "A" }
+      ],
+      "title": "Findings by Scanner",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 13 },
+      "id": 7,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showUnfilled": true
+      },
+      "targets": [
+        { "expr": "voc_findings_by_target", "legendFormat": "{{target}}", "refId": "A" }
+      ],
+      "title": "Findings by Target",
+      "type": "bargauge"
     },
     {
       "datasource": "${DS_PROM}",
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 13 },
-      "id": 6,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 13 },
+      "id": 8,
       "targets": [
         {
           "expr": "count(kube_pod_info{namespace=\"scanning\"})",
           "legendFormat": "scanning pods",
           "refId": "A"
+        },
+        {
+          "expr": "count(kube_pod_info{namespace=\"voc-core\"})",
+          "legendFormat": "voc-core pods",
+          "refId": "B"
         }
       ],
-      "title": "Cluster sanity: pods in scanning ns",
-      "type": "stat"
+      "title": "Cluster: Active Pods",
+      "type": "timeseries"
     }
   ],
   "schemaVersion": 39,
@@ -121,6 +280,6 @@
   "timezone": "browser",
   "title": "VOC Overview",
   "uid": "voc-overview",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

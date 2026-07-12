@@ -1,0 +1,101 @@
+# VOC Metrics Exporter — Deployment + Service + ServiceMonitor
+# Polls DefectDojo API and exposes Prometheus metrics on :9091/metrics.
+# Scraped by kube-prometheus-stack's Prometheus via the ServiceMonitor.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voc-metrics-exporter
+  namespace: monitoring
+  labels:
+    app: voc-metrics-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: voc-metrics-exporter
+  template:
+    metadata:
+      labels:
+        app: voc-metrics-exporter
+    spec:
+      containers:
+        - name: exporter
+          image: python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/app/voc-metrics-exporter.py"]
+          ports:
+            - containerPort: 9091
+              name: metrics
+          env:
+            - name: DD_URL
+              value: "http://defectdojo-django.voc-core.svc.cluster.local"
+            - name: DD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: defectdojo-creds
+                  key: api-key
+                  optional: true
+            - name: POLL_INTERVAL
+              value: "60"
+            - name: EXPORTER_PORT
+              value: "9091"
+          volumeMounts:
+            - name: exporter-script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: exporter-script
+          configMap:
+            name: voc-metrics-exporter-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voc-metrics-exporter
+  namespace: monitoring
+  labels:
+    app: voc-metrics-exporter
+spec:
+  selector:
+    app: voc-metrics-exporter
+  ports:
+    - port: 9091
+      targetPort: 9091
+      name: metrics
+---
+# ServiceMonitor tells Prometheus to scrape this exporter
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: voc-metrics-exporter
+  namespace: monitoring
+  labels:
+    app: voc-metrics-exporter
+    release: kps   # must match the kube-prometheus-stack release name
+spec:
+  selector:
+    matchLabels:
+      app: voc-metrics-exporter
+  endpoints:
+    - port: metrics
+      interval: 60s
+      path: /metrics

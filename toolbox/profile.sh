@@ -67,10 +67,8 @@ voc_deploy() {
       kubectl apply -f "$REPO_DIR/k8s/n8n/n8n-rbac.yaml"
       ;;
     thehive)
-      voc_helm_repo_add thehive https://thehive-project.github.io/TheHive/
-      helm repo update
-      helm upgrade --install thehive thehive/thehive -n voc-core \
-        --create-namespace -f "$REPO_DIR/k8s/thehive/values.yaml"
+      echo "[VOC] Deploying TheHive 5 (lightweight, no Cassandra)..."
+      kubectl apply -f "$REPO_DIR/k8s/thehive/thehive-deployment.yaml"
       ;;
     targets)
       kubectl apply -f "$REPO_DIR/k8s/targets/"
@@ -112,8 +110,24 @@ voc_deploy() {
       voc_helm_repo_add prometheus-community https://prometheus-community.github.io/helm-charts
       helm repo update
       kubectl apply -f "$REPO_DIR/k8s/monitoring/" 2>/dev/null || true
+      
+      echo "[VOC] Creating Grafana dashboard ConfigMap..."
+      kubectl -n monitoring create configmap voc-grafana-dashboards \
+        --from-file=voc-master.json="$REPO_DIR/k8s/monitoring/grafana-dashboard.json" \
+        --dry-run=client -o yaml | kubectl apply -f -
+        
       helm upgrade --install kps prometheus-community/kube-prometheus-stack -n monitoring \
         --create-namespace -f "$REPO_DIR/k8s/monitoring/values.yaml"
+      # Deploy VOC metrics exporter (ConfigMap with script + Deployment)
+      echo "[VOC] Creating metrics exporter ConfigMap..."
+      kubectl -n monitoring create configmap voc-metrics-exporter-script \
+        --from-file=voc-metrics-exporter.py="$REPO_DIR/scripts/voc-metrics-exporter.py" \
+        --dry-run=client -o yaml | kubectl apply -f -
+      # Create defectdojo-creds secret in monitoring namespace
+      kubectl -n monitoring create secret generic defectdojo-creds \
+        --from-literal=api-key="${DD_API_KEY:-changeme}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+      kubectl apply -f "$REPO_DIR/k8s/monitoring/voc-exporter-deployment.yaml" 2>/dev/null || true
       ;;
     all)
       echo "[VOC] Full deployment..."
@@ -131,7 +145,9 @@ voc_deploy() {
       voc_deploy scanners
       echo "[VOC] Deploying prioritization service..."
       voc_deploy prio
-      echo "[VOC] Deploying monitoring..."
+      echo "[VOC] Deploying TheHive..."
+      voc_deploy thehive
+      echo "[VOC] Deploying monitoring (Grafana + Prometheus)..."
       voc_deploy monitoring
       echo ""
       echo "[VOC] Deployment complete. Run 'voc-status' to check."
@@ -160,6 +176,10 @@ _voc_load_env() {
 voc_scan() {
   _voc_load_env
   bash "$REPO_DIR/scripts/scan-all.sh" "$@"
+}
+
+voc_history() {
+  bash "$REPO_DIR/scripts/voc-history.sh" "$@"
 }
 
 # Pre-pull scanner images into the k3d cluster so the first voc-scan
@@ -239,6 +259,8 @@ VOC Toolbox Commands:
   voc-scan                Run full scan pipeline (~10-12 min)
   voc-scan --quick        Quick scan: skip nuclei + xss (~6 min)
   voc-test-tool <tool> <target>  Run a single scanner (ffuf, sqlmap, etc.) to refine configs
+  voc-history             Show scan history from SQLite database
+  voc-history --run <N>   Show details for a specific scan run
   voc-prepull             Pre-pull scanner images into k3d (runs automatically on first setup)
   voc-forward <ns/svc> <local:remote>  Port-forward a service
   voc-logs <ns> [pod]     Get pod logs
@@ -250,6 +272,13 @@ Workflow:
   3. voc-forward voc-core/defectdojo-django 8080:8080  # access UI
   4. voc-scan                  # run scans and import to DefectDojo
   5. voc-scan --quick          # quick iteration mode
+
+Service URLs (after voc-deploy all):
+  DefectDojo:  http://localhost:8080
+  n8n:         http://localhost:5678
+  Juice Shop:  http://localhost:3000
+  TheHive:     http://localhost:9000
+  Grafana:     http://localhost:3001
 
 From Windows host (outside toolbox):
   $env:KUBECONFIG = "<repo-root>\.kube\config"
@@ -269,11 +298,13 @@ alias voc-logs="voc_logs"
 alias voc-help="voc_help"
 alias voc-run-all="voc_run_all"
 alias voc-test-tool="voc_test_tool"
+alias voc-history="voc_history"
 
 # Short aliases
 alias vu="voc_up"
 alias vd="voc_down"
 alias vs="voc_status"
 alias vscan="voc_scan"
+alias vh="voc_history"
 alias voc-test-tool="bash \$REPO_DIR/scripts/test-tool.sh"
 

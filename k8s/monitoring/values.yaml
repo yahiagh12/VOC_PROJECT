@@ -12,7 +12,7 @@ alertmanager:
 
 grafana:
   enabled: true
-  adminPassword: "REPLACE_ME_FIRST_LOGIN"   # change on first login; store outside git
+  adminPassword: "voclab2026"
   persistence:
     enabled: true
     size: 5Gi
