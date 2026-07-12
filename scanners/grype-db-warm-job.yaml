@@ -1,0 +1,56 @@
+# Grype DB warm-up — runs `grype db update` ONCE against the shared PVC
+# before the parallel per-image scan Jobs (grype-job.yaml) start.
+#
+# Why this exists: grype-job.yaml now mounts the same grype-db-cache PVC
+# as this job. Without a warm-up step, the juice-shop and dvwa scans
+# (which run in parallel — see run_grype() in scan-all.sh) would both
+# hit an empty/stale cache on their first concurrent run and could race
+# to download+extract the DB into the same directory at once. Running
+# this job synchronously first means: cold cache -> one download here;
+# warm cache -> this finishes in a few seconds (checksum check only) and
+# the two parallel scans just read from disk, no network at all.
+#
+# Placeholder substituted by scripts/scan-all.sh:
+#   __JOB_NAME__ : unique per run
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: scanning
+  labels:
+    app: grype-db-warm
+    voc.project/scanner: "true"
+spec:
+  ttlSecondsAfterFinished: 300
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: grype-db-warm
+          image: anchore/grype:v0.115.0-debug
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GRYPE_DB_CACHE_DIR
+              value: /cache/grype/db
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              echo "Warming Grype DB cache..."
+              /grype db update
+              echo "Grype DB cache ready."
+          volumeMounts:
+            - name: grype-db
+              mountPath: /cache/grype/db
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "1024Mi"
+      volumes:
+        - name: grype-db
+          persistentVolumeClaim:
+            claimName: grype-db-cache

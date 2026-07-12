@@ -2,6 +2,12 @@
 # Placeholder substituted by scripts/scan-all.sh:
 #   __JOB_NAME__     : unique per target+run
 #   __TARGET_IMAGE__ : the docker image to scan
+#
+# Mounts the shared grype-db-cache PVC (see grype-db-pvc.yaml) so the
+# vulnerability DB persists across runs instead of re-downloading on
+# every scan. scan-all.sh runs grype-db-warm-job.yaml once, synchronously,
+# before launching the parallel per-image jobs below, so by the time this
+# job starts the cache is already populated.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -19,6 +25,9 @@ spec:
         - name: grype
           image: anchore/grype:v0.115.0-debug
           imagePullPolicy: IfNotPresent
+          env:
+            - name: GRYPE_DB_CACHE_DIR
+              value: /cache/grype/db
           command: ["sh", "-c"]
           args:
             - |
@@ -31,6 +40,8 @@ spec:
           volumeMounts:
             - name: work
               mountPath: /work
+            - name: grype-db
+              mountPath: /cache/grype/db
           resources:
             requests:
               cpu: "100m"
@@ -41,3 +52,6 @@ spec:
       volumes:
         - name: work
           emptyDir: {}
+        - name: grype-db
+          persistentVolumeClaim:
+            claimName: grype-db-cache

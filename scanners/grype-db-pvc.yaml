@@ -1,0 +1,21 @@
+# Persistent cache for Grype's vulnerability DB (several hundred MB).
+# Grype Jobs are ephemeral (emptyDir work dir, deleted after
+# ttlSecondsAfterFinished), so without this PVC every single scan run
+# re-downloads the full DB from scratch — twice, since juice-shop and
+# dvwa scan in parallel. Backed by k3d's default "local-path" storage
+# class, which persists on the k3d node's filesystem across pod restarts
+# and `k3d cluster start`/`stop`. It does NOT survive a full cluster
+# recreate (`k3d cluster delete`), which is fine — that's already a
+# from-scratch state in this project.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grype-db-cache
+  namespace: scanning
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
