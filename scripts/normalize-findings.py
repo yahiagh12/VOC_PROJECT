@@ -419,13 +419,29 @@ NORMALIZERS = {
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 5:
+    if len(argv) < 5:
         sys.stderr.write(
-            "usage: normalize-findings.py <tool> <raw_file> <out_file> <target_short>\n"
+            "usage: normalize-findings.py <tool> <raw_file> <out_file> <target_short> [--db <path>] [--run-id <N>]\n"
             f"tool must be one of: {', '.join(NORMALIZERS)}\n"
         )
         return 2
+
     tool, raw_file, out_file, target_short = argv[1:5]
+
+    # Optional flags: --db <path> --run-id <N>
+    db_path = None
+    run_id = None
+    i = 5
+    while i < len(argv):
+        if argv[i] == "--db" and i + 1 < len(argv):
+            db_path = argv[i + 1]
+            i += 2
+        elif argv[i] == "--run-id" and i + 1 < len(argv):
+            run_id = int(argv[i + 1])
+            i += 2
+        else:
+            i += 1
+
     if tool not in NORMALIZERS:
         sys.stderr.write(f"unknown tool '{tool}'. known: {list(NORMALIZERS)}\n")
         return 2
@@ -442,6 +458,24 @@ def main(argv: list[str]) -> int:
     )
     # Also dump a short count to stderr so callers can see it via bash backticks.
     sys.stderr.write(f"{len(findings)}\n")
+
+    # ── Store findings in SQLite ────────────────────────────────────
+    if db_path and findings:
+        try:
+            # Import the voc-db module from the same directory
+            script_dir = Path(__file__).resolve().parent
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("voc_db", script_dir / "voc-db.py")
+            voc_db = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(voc_db)
+
+            conn = voc_db.init_db(db_path)
+            count = voc_db.store_findings(conn, run_id, tool, target_short, findings)
+            conn.close()
+            sys.stdout.write(f"normalize-findings.py: stored {count} findings in SQLite ({db_path})\n")
+        except Exception as e:
+            sys.stderr.write(f"normalize-findings.py: SQLite store failed (non-critical): {e}\n")
+
     _ = doc
     return 0
 

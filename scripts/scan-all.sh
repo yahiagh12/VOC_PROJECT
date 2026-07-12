@@ -16,7 +16,15 @@ set -euo pipefail
 #   voc-scan --quick   # skip nuclei + xss (~6 min)
 #
 # Caching strategy (so nothing re-downloads every run):
-#   - Grype vuln DB:  Docker named volume "voc-grype-db"
+#   - Grype vuln DB:  PersistentVolumeClaim "grype-db-cache" (namespace
+#                      scanning, k3d local-path storage class). Mounted by
+#                      both grype-db-warm-job.yaml and grype-job.yaml at
+#                      /cache/grype/db via GRYPE_DB_CACHE_DIR. Warmed
+#                      synchronously once per run (Step 3) before the
+#                      parallel per-image scans start, so they never race
+#                      to download the DB into the same cache concurrently.
+#                      Survives pod restarts and `k3d cluster start/stop`;
+#                      wiped only on a full `k3d cluster delete` (expected).
 #   - Nuclei templates: baked into container image (pulled once by k3d)
 #   - Scanner images:  cached on k3d node after first pull
 #
@@ -275,7 +283,7 @@ run_generic_scanner() {
     return 1
   fi
 
-  if ! python3 "$SCRIPT_DIR/normalize-findings.py" "$tool" "$raw" "$norm" "$target_short" >/dev/null 2>&1; then
+  if ! python3 "$SCRIPT_DIR/normalize-findings.py" "$tool" "$raw" "$norm" "$target_short" --db "/workspace/scanners/voc-scans.db" >/dev/null 2>&1; then
     log_error "$tool normalizer failed for $target_short (raw kept at $raw)"
     kubectl delete job "$job_name" -n scanning --ignore-not-found >/dev/null 2>&1 || true
     return 1
@@ -302,20 +310,34 @@ run_generic_scanner() {
 mkdir -p "$REPORTS_DIR"
 
 # --- Step 0: Check DefectDojo reachability ---
+# Retried because run-all.sh kicks this off right after (re)starting the
+# port-forwards -- the tunnel can accept a bare GET / a beat before the
+# Django/DRF API layer underneath is actually answering authenticated
+# requests, which previously showed up as a one-shot HTTP 000 failure.
 log_info "=== Step 0: Checking DefectDojo API ==="
-DD_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Token $DD_API_KEY" "$DD_URL/api/v2/findings/?limit=1" 2>/dev/null) || DD_HTTP="000"
+DD_HTTP="000"
+for attempt in $(seq 1 6); do
+  DD_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Token $DD_API_KEY" "$DD_URL/api/v2/findings/?limit=1" 2>/dev/null) || DD_HTTP="000"
+  [ "$DD_HTTP" = "200" ] || [ "$DD_HTTP" = "403" ] && break
+  log_warning "DefectDojo API not responding yet (HTTP $DD_HTTP) -- retrying in 5s (attempt $attempt/6)"
+  sleep 5
+done
+
 if [ "$DD_HTTP" = "200" ]; then
   log_success "DefectDojo API is reachable and authenticated"
 elif [ "$DD_HTTP" = "403" ]; then
   log_error "DefectDojo returned 403 Forbidden. Check DD_API_KEY in .env"
   exit 1
 else
-  log_error "Cannot reach DefectDojo API (HTTP $DD_HTTP). Is port-forward running on 8080?"
+  log_error "Cannot reach DefectDojo API (HTTP $DD_HTTP) after 6 attempts. Is port-forward running on 8080?"
   exit 1
 fi
 
 # Ensure ffuf wordlist ConfigMap is applied to the scanning namespace
 kubectl apply -f "$SCANNERS_DIR/ffuf-wordlist-cm.yaml" >/dev/null 2>&1 || log_warning "Failed to apply ffuf-wordlist configmap"
+
+# Ensure the Grype DB cache PVC exists (idempotent — no-op if already created).
+kubectl apply -f "$SCANNERS_DIR/grype-db-pvc.yaml" >/dev/null 2>&1 || log_warning "Failed to apply grype-db-cache PVC"
 
 # --- Step 1: Check targets are running ---
 log_info "=== Step 1: Checking scan targets ==="
@@ -421,13 +443,82 @@ for target_pair in "${DISCOVERY_TARGETS[@]}"; do
 done
 
 # ============================================================
-# Step 3: Grype SCA scan (Docker-based, DB cached in volume)
+# Step 3: Grype SCA scan (Kubernetes-based, DB cached in PVC)
 #
-# Performance: both images scan in parallel. Each runs in a
-# background subshell; output is buffered to a temp file and
-# printed sequentially after both complete.
+# Performance: warm the shared DB cache ONCE, synchronously, before
+# launching the two per-image scans in parallel. This avoids a race
+# where both jobs hit an empty/stale cache simultaneously and try to
+# download+extract the DB into the same PVC at once. On a warm cache
+# the warm-up job finishes in seconds (checksum check only).
 # ============================================================
 log_info "=== Step 3: Grype SCA scan ==="
+
+# Performance: check if the Grype DB cache is fresh (updated < 24h ago).
+# If so, skip the warm-up entirely — saves 1-3 minutes on repeat scans.
+GRYPE_SKIP_WARM=0
+grype_age_check=$(mktemp)
+cat > "$grype_age_check" <<'AGECHECK'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: grype-db-age-check
+  namespace: scanning
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: alpine:3.20
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - |
+              DB_DIR=/cache/grype/db
+              if [ -d "$DB_DIR" ] && find "$DB_DIR" -name '*.db' -mmin -1440 2>/dev/null | grep -q .; then
+                echo "===GRYPE_AGE_FRESH==="
+              else
+                echo "===GRYPE_AGE_STALE==="
+              fi
+          volumeMounts:
+            - name: grype-db
+              mountPath: /cache/grype/db
+          resources:
+            requests: { cpu: "50m", memory: "32Mi" }
+            limits:   { cpu: "100m", memory: "64Mi" }
+      volumes:
+        - name: grype-db
+          persistentVolumeClaim:
+            claimName: grype-db-cache
+AGECHECK
+kubectl delete job grype-db-age-check -n scanning --ignore-not-found >/dev/null 2>&1 || true
+if kubectl apply -f "$grype_age_check" >/dev/null 2>&1; then
+  if wait_for_job grype-db-age-check scanning 60 "grype DB age check"; then
+    age_pod=$(kubectl get pods -n scanning -l "job-name=grype-db-age-check" --no-headers -o name 2>/dev/null | head -1)
+    if [ -n "$age_pod" ] && kubectl logs -n scanning "${age_pod#pod/}" 2>/dev/null | grep -q 'GRYPE_AGE_FRESH'; then
+      GRYPE_SKIP_WARM=1
+      log_success "Grype DB cache is fresh (<24h) -- skipping warm-up"
+    fi
+  fi
+  kubectl delete job grype-db-age-check -n scanning --ignore-not-found >/dev/null 2>&1 || true
+fi
+rm -f "$grype_age_check"
+
+if [ "$GRYPE_SKIP_WARM" = "0" ]; then
+  warm_job="grype-db-warm-${TIMESTAMP}"
+  log_info "Warming Grype DB cache (shared across scans)..."
+  if apply_job_template "$SCANNERS_DIR/grype-db-warm-job.yaml" "$warm_job" JOB_NAME="$warm_job"; then
+    if wait_for_job "$warm_job" scanning 600 "grype db warm"; then
+      log_success "Grype DB cache warm"
+    else
+      log_warning "Grype DB warm-up failed/timed out -- scans below will each attempt their own DB update"
+    fi
+    kubectl delete job "$warm_job" -n scanning --ignore-not-found >/dev/null 2>&1 || true
+  else
+    log_warning "Failed to apply grype-db-warm job -- skipping warm-up, scans will update DB individually"
+  fi
+fi
 
 # run_grype <image> : scan a single container image with Grype via Kubernetes Job,
 # import results to DefectDojo. Designed to run inside a subshell.
@@ -447,6 +538,37 @@ run_grype() {
       FINDING_COUNT=$(jq '.matches | length' "$GRYPE_REPORT" 2>/dev/null || echo "?")
       log_success "Grype found $FINDING_COUNT vulnerabilities in $IMAGE_SHORT"
       dd_import "$GRYPE_REPORT" "Anchore Grype" "container,grype,$IMAGE_SHORT"
+
+      # Store grype findings in SQLite — convert matches to normalized format on the fly.
+      # Uses jq to transform grype JSON → normalized findings JSON, then pipes to voc-db.py.
+      local GRYPE_NORM="$REPORTS_DIR/grype_${IMAGE_SHORT}_${TIMESTAMP}_norm.json"
+      jq '{
+        name: "grype normalized",
+        type: "Generic Findings Import",
+        version: "1.0",
+        findings: [.matches[]? | {
+          title: ("CVE: " + (.vulnerability.id // "unknown") + " in " + (.artifact.name // "unknown") + ":" + (.artifact.version // "?")),
+          severity: (.vulnerability.severity // "Medium"),
+          cwe: null,
+          description: ((.vulnerability.description // "No description") + "\nPackage: " + (.artifact.name // "?") + " " + (.artifact.version // "?") + "\nFixed in: " + ((.vulnerability.fix.versions // []) | join(", ") // "no fix available")),
+          impact: "Vulnerable dependency detected in container image.",
+          mitigation: ("Update " + (.artifact.name // "package") + " to a patched version."),
+          param: null,
+          payload: null,
+          endpoints: [],
+          tags: ["grype", "container"],
+          unique_id_from_tool: ("grype-" + (.vulnerability.id // "unknown") + "-" + (.artifact.name // "unknown") + "-" + (.artifact.version // "?")),
+          active: true,
+          verified: false,
+          date: (now | strftime("%Y-%m-%d"))
+        }]
+      }' "$GRYPE_REPORT" > "$GRYPE_NORM" 2>/dev/null || true
+      if [ -s "$GRYPE_NORM" ]; then
+        python3 "$SCRIPT_DIR/voc-db.py" --db "/workspace/scanners/voc-scans.db" \
+          store-findings --json-file "$GRYPE_NORM" --scanner grype --target "$IMAGE_SHORT" \
+          2>/dev/null || true
+        rm -f "$GRYPE_NORM"
+      fi
     else
       log_warning "Grype report extraction failed for $IMAGE_SHORT"
     fi
@@ -728,6 +850,68 @@ log_info "========================================================"
 echo ""
 ls -lh "$REPORTS_DIR" 2>/dev/null | grep "$TIMESTAMP" || log_warning "No reports for this run"
 
+# --- Collect per-scanner counts for SQLite + ConfigMap ---
+# Parse the count from normalized JSON files produced by each scanner.
+get_norm_count() {
+  local t=$1 ts=$2
+  local file="$REPORTS_DIR/${t}_${ts}_${TIMESTAMP}.json"
+  if [ -f "$file" ]; then
+    jq '.findings | length' "$file" 2>/dev/null || echo "0"
+  else
+    echo "0"
+  fi
+}
+
+# Sum across all targets for each scanner
+TOTAL_GRYPE=0 TOTAL_NUCLEI=0 TOTAL_FFUF=0 TOTAL_SQLMAP=0 TOTAL_XSS=0
+TARGET_COUNTS_CSV=""
+for target_pair in "${DISCOVERY_TARGETS[@]}"; do
+  ts="${target_pair%%.*}"
+  # Grype uses image shortname, not target shortname
+  if [ "$ts" = "dvwa" ]; then
+    g=$(jq '.matches | length' "$REPORTS_DIR/grype_web-dvwa_${TIMESTAMP}.json" 2>/dev/null || echo 0)
+  else
+    g=$(jq '.matches | length' "$REPORTS_DIR/grype_${ts}_${TIMESTAMP}.json" 2>/dev/null || echo 0)
+  fi
+  n=$(get_norm_count nuclei "$ts")
+  f=$(get_norm_count ffuf "$ts")
+  s=$(get_norm_count sqlmap "$ts")
+  x=$(get_norm_count xss "$ts")
+  TOTAL_GRYPE=$((TOTAL_GRYPE + g))
+  TOTAL_NUCLEI=$((TOTAL_NUCLEI + n))
+  TOTAL_FFUF=$((TOTAL_FFUF + f))
+  TOTAL_SQLMAP=$((TOTAL_SQLMAP + s))
+  TOTAL_XSS=$((TOTAL_XSS + x))
+  # Build CSV for target-level breakdown
+  [ -n "$TARGET_COUNTS_CSV" ] && TARGET_COUNTS_CSV="${TARGET_COUNTS_CSV},"
+  TARGET_COUNTS_CSV="${TARGET_COUNTS_CSV}${ts}:grype:${g},${ts}:nuclei:${n},${ts}:ffuf:${f},${ts}:sqlmap:${s},${ts}:xss:${x}"
+done
+
+# --- Record scan run in SQLite ---
+VOC_DB="/workspace/scanners/voc-scans.db"
+TARGET_NAMES=""
+for tp in "${DISCOVERY_TARGETS[@]}"; do
+  TARGET_NAMES="$TARGET_NAMES ${tp%%.*}"
+done
+TARGET_NAMES="${TARGET_NAMES# }"
+
+if python3 "$SCRIPT_DIR/voc-db.py" --db "$VOC_DB" record \
+    --timestamp "$TIMESTAMP" \
+    --duration "$DURATION" \
+    --quick-mode "$QUICK_MODE" \
+    --targets "$TARGET_NAMES" \
+    --counts "grype:$TOTAL_GRYPE,nuclei:$TOTAL_NUCLEI,ffuf:$TOTAL_FFUF,sqlmap:$TOTAL_SQLMAP,xss:$TOTAL_XSS" \
+    --target-counts "$TARGET_COUNTS_CSV" \
+    --reports-dir "$REPORTS_DIR" 2>/dev/null; then
+  log_success "Scan recorded in SQLite database ($VOC_DB)"
+else
+  log_warning "Failed to record scan in SQLite (non-critical)"
+fi
+
+# --- Rotate old report files (keep last 7 runs) ---
+ROTATED=$(python3 "$SCRIPT_DIR/voc-db.py" --db "$VOC_DB" rotate --keep 7 --reports-dir "$REPORTS_DIR" 2>/dev/null) || true
+[ -n "$ROTATED" ] && log_info "$ROTATED"
+
 # --- Write scan status ConfigMap for n8n dashboard ---
 SCAN_STATUS_JSON=$(cat <<EOJSON
 {
@@ -736,7 +920,12 @@ SCAN_STATUS_JSON=$(cat <<EOJSON
   "quick_mode": $( [ "$QUICK_MODE" = "1" ] && echo 'true' || echo 'false' ),
   "targets": "${DISCOVERY_TARGETS[*]}",
   "reports_dir": "$REPORTS_DIR",
-  "defectdojo_url": "$DD_URL"
+  "defectdojo_url": "$DD_URL",
+  "grype_count": $TOTAL_GRYPE,
+  "nuclei_count": $TOTAL_NUCLEI,
+  "ffuf_count": $TOTAL_FFUF,
+  "sqlmap_count": $TOTAL_SQLMAP,
+  "xss_count": $TOTAL_XSS
 }
 EOJSON
 )
