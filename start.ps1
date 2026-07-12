@@ -14,7 +14,7 @@ $hash = ($toolboxFiles | ForEach-Object { (Get-FileHash $_).Hash }) -join ""
 $cacheFile = ".\.toolbox-build-hash"
 $cached = if (Test-Path $cacheFile) { Get-Content $cacheFile -Raw } else { "" }
 if ($hash -ne $cached.Trim()) {
-    Write-Host "[VOC] Toolbox files changed — rebuilding image..." -ForegroundColor Yellow
+    Write-Host "[VOC] Toolbox files changed - rebuilding image..." -ForegroundColor Yellow
     docker compose build
     $hash | Set-Content $cacheFile -NoNewline
 } else {
@@ -43,6 +43,7 @@ $bashScript = @"
   echo '  VOC is ready! You are now in the toolbox.'
   echo '  Port-forwards are running in the background.'
   echo '  Type voc-scan to re-run scans.'
+  echo '  Type voc-history to view scan history.'
   echo '  Type voc-status to check the cluster.'
   echo '=============================================='
   echo ''

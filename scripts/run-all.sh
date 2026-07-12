@@ -31,11 +31,18 @@ if k3d cluster list voc 2>/dev/null | grep -q "voc"; then
   if kubectl get nodes >/dev/null 2>&1; then
     log_success "k3d cluster 'voc' is running and reachable"
   else
-    log_warning "k3d cluster 'voc' exists but is stale/unreachable. Recreating..."
-    k3d cluster delete voc 2>/dev/null || true
-    docker network rm voc 2>/dev/null || true
-    sleep 2
-    voc_up
+    log_info "Attempting to start stopped k3d cluster 'voc'..."
+    k3d cluster start voc 2>/dev/null || true
+    sleep 5
+    if kubectl get nodes >/dev/null 2>&1; then
+      log_success "k3d cluster 'voc' started successfully!"
+    else
+      log_warning "k3d cluster 'voc' is stale/unreachable even after start. Recreating..."
+      k3d cluster delete voc 2>/dev/null || true
+      docker network rm voc 2>/dev/null || true
+      sleep 2
+      voc_up
+    fi
   fi
 else
   log_info "Creating k3d cluster..."
@@ -68,6 +75,9 @@ voc_deploy targets
 
 log_info "Deploying prioritization service..."
 voc_deploy prio 2>/dev/null || log_warning "Prioritization service deploy failed (may need image build)"
+
+log_info "Deploying TheHive 5..."
+voc_deploy thehive 2>/dev/null || log_warning "TheHive deploy failed (non-critical)"
 
 # Pre-pull scanner images in background (overlaps with Phase 3 readiness waits).
 # This eliminates the 1-2 min cold-start penalty on the first voc-scan.
@@ -178,11 +188,17 @@ else
   sleep 1
 
   # Launch all port-forwards simultaneously
-  log_info "Starting port-forwards (DefectDojo:8080, n8n:5678, Juice Shop:3000)..."
+  log_info "Starting port-forwards (DefectDojo:8080, n8n:5678, Juice Shop:3000, TheHive:9000)..."
   kubectl port-forward --address 0.0.0.0 -n voc-core svc/defectdojo-django 8080:80 >/dev/null 2>&1 &
   kubectl port-forward --address 0.0.0.0 -n voc-core svc/n8n 5678:5678 >/dev/null 2>&1 &
   kubectl port-forward --address 0.0.0.0 -n targets svc/juice-shop 3000:3000 >/dev/null 2>&1 &
-  sleep 3  # single wait for all three to bind
+  kubectl port-forward --address 0.0.0.0 -n voc-core svc/thehive-svc 9000:9000 >/dev/null 2>&1 &
+  # Grafana port-forward (monitoring namespace) — only if the service exists
+  if kubectl get svc -n monitoring kps-grafana >/dev/null 2>&1; then
+    kubectl port-forward --address 0.0.0.0 -n monitoring svc/kps-grafana 3001:80 >/dev/null 2>&1 &
+    log_info "Grafana port-forward started on :3001"
+  fi
+  sleep 3  # single wait for all to bind
 
   # Verify DefectDojo port-forward is working (tight loop: 5 attempts, 1s)
   log_info "Verifying DefectDojo is reachable on localhost:8080..."
@@ -238,7 +254,10 @@ echo -e "${GREEN}║    User: admin  Password: ${DD_PASS:-check above}          
 echo -e "${GREEN}║                                                          ║${NC}"
 echo -e "${GREEN}║  n8n:         http://localhost:5678                       ║${NC}"
 echo -e "${GREEN}║  Juice Shop:  http://localhost:3000                       ║${NC}"
+echo -e "${GREEN}║  TheHive:     http://localhost:9000                       ║${NC}"
+echo -e "${GREEN}║  Grafana:     http://localhost:3001                       ║${NC}"
 echo -e "${GREEN}║                                                          ║${NC}"
 echo -e "${GREEN}║  Run 'voc-scan' to re-run scans                          ║${NC}"
+echo -e "${GREEN}║  Run 'voc-history' to view scan history                  ║${NC}"
 echo -e "${GREEN}║  Run 'voc-status' to check cluster                       ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
