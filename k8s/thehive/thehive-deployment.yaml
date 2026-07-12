@@ -1,0 +1,110 @@
+# TheHive 5 Community Edition — Lightweight Lab Deployment
+# Uses Berkeley JE backend (no Cassandra/OpenSearch required).
+# Suitable for lab environments with limited resources.
+#
+# Access: http://localhost:9000
+# Default login: admin@thehive.local / secret
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: thehive-data
+  namespace: voc-core
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thehive
+  namespace: voc-core
+  labels:
+    app: thehive
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: thehive
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: thehive
+    spec:
+      initContainers:
+        - name: fix-permissions
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 1000:1000 /data"]
+          volumeMounts:
+            - name: thehive-data
+              mountPath: /data
+      containers:
+        - name: thehive
+          image: strangebee/thehive:5.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+              name: http
+          env:
+            - name: TH_SECRET
+              value: "voc-lab-secret-change-in-production"
+            - name: JAVA_OPTS
+              value: "-Xms1g -Xmx1g"
+          command: ["/opt/thehive/entrypoint"]
+          args:
+            - --bdb-directory
+            - /data/db
+            - --index-backend
+            - lucene
+            - --storage-directory
+            - /data/files
+            - --cluster-min-nodes-count
+            - "1"
+          volumeMounts:
+            - name: thehive-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2048Mi
+          readinessProbe:
+            httpGet:
+              path: /api/v1/status/public
+              port: 9000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/status/public
+              port: 9000
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 5
+      volumes:
+        - name: thehive-data
+          persistentVolumeClaim:
+            claimName: thehive-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: thehive-svc
+  namespace: voc-core
+  labels:
+    app: thehive
+spec:
+  selector:
+    app: thehive
+  ports:
+    - port: 9000
+      targetPort: 9000
+      name: http

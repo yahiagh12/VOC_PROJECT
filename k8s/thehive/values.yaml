@@ -1,23 +1,28 @@
-# TheHive 5 Community Edition (free). Requires Cassandra + OpenSearch as deps.
+# TheHive 5 Community Edition — Lab Deployment
 #
-# Double-check before install:
-#   - You are deploying TheHive Community Edition (free), not Enterprise.
-#   - You are on a supported 5.x release line (pin a concrete tag below).
+# DEPRECATED: This Helm values file was originally planned for a Helm chart
+# deployment, but TheHive doesn't have a widely available public Helm chart.
 #
-# Add the repo (verify official chart location/version):
-#   helm repo add thehive https://thehive-project.github.io/TheHive/
-#   helm repo update
-#   helm show values thehive/thehive > docs/thehive-defaults.yaml
+# CURRENT APPROACH: TheHive is deployed via raw K8s manifests in
+# thehive-deployment.yaml (uses BerkeleyJE + Lucene, no Cassandra/OpenSearch).
 #
-# Install:
-#   helm install thehive thehive/thehive -n voc-core -f k8s/thehive/values.yaml
+# Deploy:
+#   kubectl apply -f k8s/thehive/thehive-deployment.yaml
 #
-# Cassandra + OpenSearch are heavy; on a RAM-constrained lab host consider
-# running TheHive via the official docker-compose instead of in-cluster.
+# Or via the toolbox:
+#   voc-deploy thehive
+#
+# Access: http://localhost:9000
+# Default login: admin@thehive.local / secret
+#
+# If you need the full production stack (Cassandra + OpenSearch), consider
+# running TheHive via Docker Compose outside the cluster, or creating a
+# custom Helm chart from the official docker-compose.yml.
 
+# The settings below are kept for reference only (Helm chart doesn't exist):
 thehive:
   image:
-    tag: 5.4.x          # pin to a concrete 5.x release after confirming
+    tag: 5.4          # pin to a concrete 5.x release after confirming
   config:
     application:
       secret: "REPLACE_WITH_RANDOM_64_BYTE_STRING"
@@ -29,15 +34,8 @@ thehive:
   ingress:
     enabled: false
 
-# Bundled dependencies for the lab (disable if you point at external instances).
 cassandra:
-  enabled: true
-  persistence:
-    size: 10Gi
-    storageClass: local-path
+  enabled: false       # not needed for lab (BerkeleyJE backend used instead)
 
 opensearch:
-  enabled: true
-  persistence:
-    size: 10Gi
-    storageClass: local-path
+  enabled: false       # not needed for lab (Lucene backend used instead)
