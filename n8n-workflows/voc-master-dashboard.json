@@ -16,7 +16,10 @@
       "name": "Nightly Scan (02:00)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-600, 0]
+      "position": [
+        -600,
+        0
+      ]
     },
     {
       "parameters": {
@@ -29,7 +32,10 @@
       "name": "Webhook: Start Full Scan",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-600, 240],
+      "position": [
+        -600,
+        240
+      ],
       "webhookId": "voc-scan-full"
     },
     {
@@ -43,7 +49,10 @@
       "name": "Webhook: Start Quick Scan",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-600, 480],
+      "position": [
+        -600,
+        480
+      ],
       "webhookId": "voc-scan-quick"
     },
     {
@@ -57,7 +66,10 @@
       "name": "Webhook: Dashboard",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-600, 720],
+      "position": [
+        -600,
+        720
+      ],
       "webhookId": "voc-dashboard"
     },
     {
@@ -75,7 +87,10 @@
       "name": "Health Check (5 min)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-600, 960]
+      "position": [
+        -600,
+        960
+      ]
     },
     {
       "parameters": {
@@ -92,17 +107,23 @@
       "name": "Poll Findings (5 min)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-600, 1440]
+      "position": [
+        -600,
+        1440
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Set scan mode based on trigger\nlet quickMode = '0';\nlet triggerSource = 'schedule';\n\nif ($input.first()?.json?.headers) {\n  // Came from a webhook\n  triggerSource = 'webhook';\n}\n\n// Check which webhook triggered this\nconst nodeName = $input.first()?.json?.$node?.name || '';\nif (nodeName.includes('Quick') || $('Webhook: Start Quick Scan')?.isExecuted) {\n  quickMode = '1';\n}\n\nreturn [{ json: { quickMode, triggerSource, startedAt: new Date().toISOString() } }];"
+        "jsCode": "// Both the nightly cron and the \"full scan\" webhook land here \u2014 always a full scan.\n// (Quick scans are routed separately via \"Set Quick Mode\".)\nconst triggerSource = $input.first()?.json?.headers ? 'webhook' : 'schedule';\nreturn [{ json: { quickMode: '0', triggerSource, startedAt: new Date().toISOString() } }];"
       },
       "id": "set-scan-mode",
       "name": "Set Scan Mode",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-300, 240]
+      "position": [
+        -300,
+        240
+      ]
     },
     {
       "parameters": {
@@ -112,7 +133,10 @@
       "name": "Set Quick Mode",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-300, 480]
+      "position": [
+        -300,
+        480
+      ]
     },
     {
       "parameters": {
@@ -143,7 +167,10 @@
       "name": "Create Scan Job",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-60, 360],
+      "position": [
+        -60,
+        360
+      ],
       "onError": "continueErrorOutput"
     },
     {
@@ -154,7 +181,10 @@
       "name": "Extract Job Name",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [180, 300]
+      "position": [
+        180,
+        300
+      ]
     },
     {
       "parameters": {
@@ -178,28 +208,41 @@
       "name": "Poll Job Status",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [420, 300]
+      "position": [
+        420,
+        300
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const job = $input.first().json;\nconst conditions = job?.status?.conditions || [];\nconst prevData = $('Extract Job Name').first()?.json || $('Wait 15s').first()?.json || {};\n\nlet status = 'Running';\nlet done = false;\n\nfor (const c of conditions) {\n  if (c.type === 'Complete' && c.status === 'True') {\n    status = 'Complete';\n    done = true;\n    break;\n  }\n  if (c.type === 'Failed' && c.status === 'True') {\n    status = 'Failed';\n    done = true;\n    break;\n  }\n}\n\nconst pollCount = (prevData.pollCount || 0) + 1;\nif (pollCount >= (prevData.maxPolls || 120)) {\n  status = 'Timeout';\n  done = true;\n}\n\nreturn [{\n  json: {\n    jobName: prevData.jobName || job?.metadata?.name,\n    namespace: prevData.namespace || 'scanning',\n    startedAt: prevData.startedAt,\n    quickMode: prevData.quickMode,\n    status,\n    done,\n    pollCount,\n    maxPolls: prevData.maxPolls || 120,\n    completedAt: done ? new Date().toISOString() : null,\n    active: job?.status?.active || 0,\n    succeeded: job?.status?.succeeded || 0,\n    failed: job?.status?.failed || 0\n  }\n}];"
+        "jsCode": "const job = $input.first().json;\nconst conditions = job?.status?.conditions || [];\nconst jobMeta = $('Extract Job Name').first()?.json || {};\n\n// Track pollCount reliably across loop iterations. $('Extract Job Name') always\n// returns its ONE fixed output (pollCount: 0), so reading pollCount from it every\n// pass never advances the counter and Timeout never fires. Static data keyed by\n// $execution.id survives across this loop's iterations and resets automatically\n// on the next execution (different execution id), so concurrent scans don't\n// collide with each other's counters.\nconst staticData = $getWorkflowStaticData('node');\nconst execId = $execution.id;\nif (staticData.execId !== execId) {\n  staticData.execId = execId;\n  staticData.pollCount = 0;\n}\nstaticData.pollCount += 1;\n\nlet status = 'Running';\nlet done = false;\n\nfor (const c of conditions) {\n  if (c.type === 'Complete' && c.status === 'True') {\n    status = 'Complete';\n    done = true;\n    break;\n  }\n  if (c.type === 'Failed' && c.status === 'True') {\n    status = 'Failed';\n    done = true;\n    break;\n  }\n}\n\nconst maxPolls = jobMeta.maxPolls || 120;\nif (staticData.pollCount >= maxPolls) {\n  status = 'Timeout';\n  done = true;\n}\n\nreturn [{\n  json: {\n    jobName: jobMeta.jobName || job?.metadata?.name,\n    namespace: jobMeta.namespace || 'scanning',\n    startedAt: jobMeta.startedAt,\n    quickMode: jobMeta.quickMode,\n    status,\n    done,\n    pollCount: staticData.pollCount,\n    maxPolls,\n    completedAt: done ? new Date().toISOString() : null,\n    active: job?.status?.active || 0,\n    succeeded: job?.status?.succeeded || 0,\n    failed: job?.status?.failed || 0\n  }\n}];"
       },
       "id": "check-job-status",
       "name": "Check Job Status",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 300]
+      "position": [
+        660,
+        300
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "job-done",
               "leftValue": "={{ $json.done }}",
               "rightValue": true,
-              "operator": { "type": "boolean", "operation": "equals" }
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
             }
           ],
           "combinator": "and"
@@ -210,7 +253,10 @@
       "name": "Job Done?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [900, 300]
+      "position": [
+        900,
+        300
+      ]
     },
     {
       "parameters": {
@@ -221,18 +267,28 @@
       "name": "Wait 15s",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
-      "position": [900, 540]
+      "position": [
+        900,
+        540
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "job-success",
               "leftValue": "={{ $json.status }}",
               "rightValue": "Complete",
-              "operator": { "type": "string", "operation": "equals" }
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
             }
           ],
           "combinator": "and"
@@ -243,7 +299,10 @@
       "name": "Scan Succeeded?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1140, 300]
+      "position": [
+        1140,
+        300
+      ]
     },
     {
       "parameters": {
@@ -254,17 +313,28 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "active", "value": "true" },
-            { "name": "limit", "value": "500" }
+            {
+              "name": "active",
+              "value": "true"
+            },
+            {
+              "name": "limit",
+              "value": "500"
+            }
           ]
         },
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "dd-get-findings-post-scan",
       "name": "Get Post-Scan Findings",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1380, 180]
+      "position": [
+        1380,
+        180
+      ]
     },
     {
       "parameters": {
@@ -274,41 +344,57 @@
       "name": "Build Scan Summary",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1620, 180]
+      "position": [
+        1620,
+        180
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ success: true, message: 'Scan completed', data: $json }, null, 2) }}",
-        "options": { "responseCode": 200 }
+        "options": {
+          "responseCode": 200
+        }
       },
       "id": "respond-scan-ok",
       "name": "Respond: Scan OK",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1860, 180]
+      "position": [
+        1860,
+        180
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const jobData = $('Check Job Status').first()?.json || $input.first()?.json || {};\nconst errorInfo = $('Create Scan Job').first()?.json || {};\n\nreturn [{\n  json: {\n    error: true,\n    status: jobData.status || 'Error',\n    jobName: jobData.jobName || 'unknown',\n    message: `Scan ${jobData.status || 'failed'}: job=${jobData.jobName || 'N/A'}`,\n    pollCount: jobData.pollCount || 0,\n    failed: jobData.failed || 0,\n    errorDetails: errorInfo.message || errorInfo.reason || null,\n    timestamp: new Date().toISOString()\n  }\n}];"
+        "jsCode": "// This node is reached two ways: (a) straight from \"Create Scan Job\"'s error\n// output, where \"Check Job Status\" never ran, or (b) from \"Scan Succeeded?\" = false,\n// where it did. Referencing a node that never executed in this branch with $()\n// throws, so guard it instead of assuming it always ran.\nlet jobData = {};\ntry {\n  jobData = $('Check Job Status').first()?.json || {};\n} catch (e) {\n  jobData = {};\n}\nif (!jobData.jobName) {\n  jobData = { ...jobData, ...($input.first()?.json || {}) };\n}\n\nlet errorInfo = {};\ntry {\n  errorInfo = $('Create Scan Job').first()?.json || {};\n} catch (e) {\n  errorInfo = {};\n}\n\nreturn [{\n  json: {\n    error: true,\n    status: jobData.status || 'Error',\n    jobName: jobData.jobName || 'unknown',\n    message: `Scan ${jobData.status || 'failed'}: job=${jobData.jobName || 'N/A'}`,\n    pollCount: jobData.pollCount || 0,\n    failed: jobData.failed || 0,\n    errorDetails: errorInfo.message || errorInfo.reason || $input.first()?.json?.message || null,\n    timestamp: new Date().toISOString()\n  }\n}];"
       },
       "id": "build-error-report",
       "name": "Build Error Report",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1380, 480]
+      "position": [
+        1380,
+        480
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ success: false, error: $json.message, data: $json }, null, 2) }}",
-        "options": { "responseCode": 500 }
+        "options": {
+          "responseCode": 500
+        }
       },
       "id": "respond-scan-error",
       "name": "Respond: Scan Error",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1620, 480]
+      "position": [
+        1620,
+        480
+      ]
     },
     {
       "parameters": {
@@ -318,7 +404,10 @@
       "name": "Notify: Scan Error",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1620, 660]
+      "position": [
+        1620,
+        660
+      ]
     },
     {
       "parameters": {
@@ -329,17 +418,28 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "active", "value": "true" },
-            { "name": "limit", "value": "500" }
+            {
+              "name": "active",
+              "value": "true"
+            },
+            {
+              "name": "limit",
+              "value": "500"
+            }
           ]
         },
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "dd-get-findings-dashboard",
       "name": "Get Findings (Dashboard)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-300, 720]
+      "position": [
+        -300,
+        720
+      ]
     },
     {
       "parameters": {
@@ -350,17 +450,28 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "limit", "value": "50" },
-            { "name": "o", "value": "-updated" }
+            {
+              "name": "limit",
+              "value": "50"
+            },
+            {
+              "name": "o",
+              "value": "-updated"
+            }
           ]
         },
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "dd-get-tests",
       "name": "Get Test History",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-300, 900]
+      "position": [
+        -300,
+        900
+      ]
     },
     {
       "parameters": {
@@ -370,91 +481,125 @@
       "name": "Build Dashboard Data",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [0, 780]
+      "position": [
+        0,
+        780
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify($json, null, 2) }}",
-        "options": { "responseCode": 200 }
+        "options": {
+          "responseCode": 200
+        }
       },
       "id": "respond-dashboard",
       "name": "Respond: Dashboard",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [240, 780]
+      "position": [
+        240,
+        780
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Health check: ping DefectDojo, prioritization service, and scan targets\nconst checks = [];\n\nasync function checkUrl(name, url) {\n  try {\n    const resp = await this.helpers.request({ url, method: 'GET', timeout: 5000, resolveWithFullResponse: true });\n    return { name, status: 'healthy', statusCode: resp.statusCode || 200 };\n  } catch (e) {\n    return { name, status: 'unhealthy', error: e.message || String(e) };\n  }\n}\n\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    checks: [\n      { name: 'defectdojo', url: 'http://defectdojo-django.voc-core.svc.cluster.local/' },\n      { name: 'prioritization', url: 'http://prioritization-service.voc-core.svc.cluster.local:8000/healthz' },\n      { name: 'juice-shop', url: 'http://juice-shop.targets.svc.cluster.local:3000/' },\n      { name: 'dvwa', url: 'http://dvwa.targets.svc.cluster.local/' }\n    ]\n  }\n}];"
+        "jsCode": "// Just hands off the list of targets \u2014 the actual pinging happens in the\n// HTTP Request nodes downstream.\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    checks: [\n      { name: 'defectdojo', url: 'http://defectdojo-django.voc-core.svc.cluster.local/' },\n      { name: 'prioritization', url: 'http://prioritization-service.voc-core.svc.cluster.local:8000/healthz' },\n      { name: 'juice-shop', url: 'http://juice-shop.targets.svc.cluster.local:3000/' },\n      { name: 'dvwa', url: 'http://dvwa.targets.svc.cluster.local/' },\n      { name: 'thehive', url: 'http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public' },\n      { name: 'grafana', url: 'http://kps-grafana.monitoring.svc.cluster.local/api/health' }\n    ]\n  }\n}];"
       },
       "id": "health-list",
       "name": "Health Check Targets",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-300, 960]
+      "position": [
+        -300,
+        960
+      ]
     },
     {
       "parameters": {
         "method": "GET",
         "url": "http://defectdojo-django.voc-core.svc.cluster.local/",
-        "options": { "timeout": 5000 }
+        "options": {
+          "timeout": 5000
+        }
       },
       "id": "health-dd",
       "name": "Ping DefectDojo",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-60, 880],
+      "position": [
+        -60,
+        880
+      ],
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
         "method": "GET",
         "url": "http://prioritization-service.voc-core.svc.cluster.local:8000/healthz",
-        "options": { "timeout": 5000 }
+        "options": {
+          "timeout": 5000
+        }
       },
       "id": "health-prio",
       "name": "Ping Prioritization",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-60, 1040],
+      "position": [
+        -60,
+        1040
+      ],
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
         "method": "GET",
         "url": "http://juice-shop.targets.svc.cluster.local:3000/",
-        "options": { "timeout": 5000 }
+        "options": {
+          "timeout": 5000
+        }
       },
       "id": "health-juice",
       "name": "Ping Juice Shop",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [180, 880],
+      "position": [
+        180,
+        880
+      ],
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
         "method": "GET",
         "url": "http://dvwa.targets.svc.cluster.local/",
-        "options": { "timeout": 5000 }
+        "options": {
+          "timeout": 5000
+        }
       },
       "id": "health-dvwa",
       "name": "Ping DVWA",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [180, 1040],
+      "position": [
+        180,
+        1040
+      ],
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "// Aggregate health check results\nconst dd = $('Ping DefectDojo').first()?.json;\nconst prio = $('Ping Prioritization').first()?.json;\nconst juice = $('Ping Juice Shop').first()?.json;\nconst dvwa = $('Ping DVWA').first()?.json;\n\nfunction toStatus(resp, name) {\n  if (!resp) return { name, status: 'unknown' };\n  if (resp.error || resp.message?.includes('ECONNREFUSED')) {\n    return { name, status: 'unhealthy', error: resp.message || resp.error };\n  }\n  return { name, status: 'healthy' };\n}\n\nconst results = [\n  toStatus(dd, 'DefectDojo'),\n  toStatus(prio, 'Prioritization Service'),\n  toStatus(juice, 'Juice Shop'),\n  toStatus(dvwa, 'DVWA')\n];\n\nconst allHealthy = results.every(r => r.status === 'healthy');\n\n// Store in static data for dashboard access\nconst staticData = $getWorkflowStaticData('global');\nstaticData.lastHealthCheck = {\n  timestamp: new Date().toISOString(),\n  overall: allHealthy ? 'healthy' : 'degraded',\n  services: results\n};\n\nconsole.log(`[VOC Health] ${allHealthy ? 'All services healthy' : 'Some services unhealthy: ' + results.filter(r => r.status !== 'healthy').map(r => r.name).join(', ')}`);\n\nreturn [{ json: staticData.lastHealthCheck }];"
+        "jsCode": "// Aggregate health check results\nconst dd = $('Ping DefectDojo').first()?.json;\nconst prio = $('Ping Prioritization').first()?.json;\nconst juice = $('Ping Juice Shop').first()?.json;\nconst dvwa = $('Ping DVWA').first()?.json;\nlet thehive = null;\ntry { thehive = $('Ping TheHive').first()?.json; } catch(e) {}\nlet grafana = null;\ntry { grafana = $('Ping Grafana').first()?.json; } catch(e) {}\n\nfunction toStatus(resp, name) {\n  if (!resp) return { name, status: 'unknown' };\n  if (resp.error || resp.message?.includes('ECONNREFUSED')) {\n    return { name, status: 'unhealthy', error: resp.message || resp.error };\n  }\n  return { name, status: 'healthy' };\n}\n\nconst results = [\n  toStatus(dd, 'DefectDojo'),\n  toStatus(prio, 'Prioritization Service'),\n  toStatus(juice, 'Juice Shop'),\n  toStatus(dvwa, 'DVWA'),\n  toStatus(thehive, 'TheHive'),\n  toStatus(grafana, 'Grafana')\n];\n\nconst allHealthy = results.every(r => r.status === 'healthy');\n\n// Store in static data for dashboard access\nconst staticData = $getWorkflowStaticData('global');\nstaticData.lastHealthCheck = {\n  timestamp: new Date().toISOString(),\n  overall: allHealthy ? 'healthy' : 'degraded',\n  services: results\n};\n\nconsole.log(`[VOC Health] ${allHealthy ? 'All services healthy' : 'Some services unhealthy: ' + results.filter(r => r.status !== 'healthy').map(r => r.name).join(', ')}`);\n\nreturn [{ json: staticData.lastHealthCheck }];"
       },
       "id": "aggregate-health",
       "name": "Aggregate Health",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 960]
+      "position": [
+        540,
+        960
+      ]
     },
     {
       "parameters": {
@@ -465,17 +610,28 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "active", "value": "true" },
-            { "name": "limit", "value": "200" }
+            {
+              "name": "active",
+              "value": "true"
+            },
+            {
+              "name": "limit",
+              "value": "200"
+            }
           ]
         },
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "dd-poll-findings",
       "name": "Get Active Findings",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-300, 1440]
+      "position": [
+        -300,
+        1440
+      ]
     },
     {
       "parameters": {
@@ -485,18 +641,28 @@
       "name": "Flatten & Enrich",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-60, 1440]
+      "position": [
+        -60,
+        1440
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "is-critical",
               "leftValue": "={{ $json.priority }}",
               "rightValue": 80,
-              "operator": { "type": "number", "operation": "gte" }
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
             }
           ],
           "combinator": "and"
@@ -504,21 +670,31 @@
         "options": {}
       },
       "id": "if-critical",
-      "name": "Priority ≥ 80 (Critical)?",
+      "name": "Priority \u2265 80 (Critical)?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [180, 1440]
+      "position": [
+        180,
+        1440
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "is-high",
               "leftValue": "={{ $json.priority }}",
               "rightValue": 60,
-              "operator": { "type": "number", "operation": "gte" }
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
             }
           ],
           "combinator": "and"
@@ -526,211 +702,636 @@
         "options": {}
       },
       "id": "if-high",
-      "name": "Priority ≥ 60 (High)?",
+      "name": "Priority \u2265 60 (High)?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [420, 1560]
+      "position": [
+        420,
+        1560
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// CRITICAL PRIORITY — Log to execution history.\n// To wire real alerting, replace this with an HTTP Request node\n// pointing to your Slack/Discord webhook or PagerDuty.\nconst f = $input.first().json;\nconsole.log(`[VOC CRITICAL] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'critical', notified: true, channel: 'execution-log' } }];"
+        "jsCode": "// CRITICAL PRIORITY \u2014 Log to execution history.\n// To wire real alerting, replace this with an HTTP Request node\n// pointing to your Slack/Discord webhook or PagerDuty.\nconst f = $input.first().json;\nconsole.log(`[VOC CRITICAL] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'critical', notified: true, channel: 'execution-log' } }];"
       },
       "id": "alert-critical",
       "name": "Alert: Critical",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 1380]
+      "position": [
+        420,
+        1380
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// HIGH PRIORITY — Log to execution history.\nconst f = $input.first().json;\nconsole.log(`[VOC HIGH] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'high', notified: true, channel: 'execution-log' } }];"
+        "method": "POST",
+        "url": "http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/alert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.THEHIVE_API_KEY || '' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  type: 'voc-scan',\n  source: 'DefectDojo',\n  sourceRef: 'finding-' + $json.id,\n  title: '[VOC] ' + $json.severity + ': ' + $json.title,\n  description: 'Auto-created by VOC n8n workflow.\\nSeverity: ' + $json.severity + '\\nPriority: ' + ($json.priority || 'N/A') + '\\nCVE: ' + ($json.cve || 'N/A') + '\\nDefectDojo Finding ID: ' + $json.id,\n  severity: $json.severity === 'Critical' ? 1 : $json.severity === 'High' ? 2 : 3,\n  tags: ($json.tags || []).concat(['voc', 'auto-created']),\n  tlp: 2,\n  pap: 2\n}) }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 10000
+        }
+      },
+      "id": "thehive-create-alert",
+      "name": "Create TheHive Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        1320
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "health-thehive",
+      "name": "Ping TheHive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -60,
+        1200
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://kps-grafana.monitoring.svc.cluster.local/api/health",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "health-grafana",
+      "name": "Ping Grafana",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        1200
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// HIGH PRIORITY \u2014 Log to execution history.\nconst f = $input.first().json;\nconsole.log(`[VOC HIGH] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'high', notified: true, channel: 'execution-log' } }];"
       },
       "id": "alert-high",
       "name": "Alert: High",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 1500]
+      "position": [
+        660,
+        1500
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// MEDIUM / LOW — Log only, no notification.\nconst f = $input.first().json;\nconsole.log(`[VOC INFO] Finding #${f.id}: ${f.title} (priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'info', notified: false } }];"
+        "jsCode": "// MEDIUM / LOW \u2014 Log only, no notification.\nconst f = $input.first().json;\nconsole.log(`[VOC INFO] Finding #${f.id}: ${f.title} (priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'info', notified: false } }];"
       },
       "id": "log-low",
       "name": "Log: Medium/Low",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 1680]
+      "position": [
+        660,
+        1680
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 6,
+        "options": {}
+      },
+      "id": "merge-health-checks",
+      "name": "Merge Health Checks",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        300,
+        960
+      ]
     }
   ],
   "connections": {
     "Nightly Scan (02:00)": {
       "main": [
-        [{ "node": "Set Scan Mode", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Set Scan Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Webhook: Start Full Scan": {
       "main": [
-        [{ "node": "Set Scan Mode", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Set Scan Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Webhook: Start Quick Scan": {
       "main": [
-        [{ "node": "Set Quick Mode", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Set Quick Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Set Scan Mode": {
       "main": [
-        [{ "node": "Create Scan Job", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Create Scan Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Set Quick Mode": {
       "main": [
-        [{ "node": "Create Scan Job", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Create Scan Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Create Scan Job": {
       "main": [
-        [{ "node": "Extract Job Name", "type": "main", "index": 0 }],
-        [{ "node": "Build Error Report", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Extract Job Name",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Extract Job Name": {
       "main": [
-        [{ "node": "Poll Job Status", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Poll Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Poll Job Status": {
       "main": [
-        [{ "node": "Check Job Status", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Check Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Check Job Status": {
       "main": [
-        [{ "node": "Job Done?", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Job Done?",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Job Done?": {
       "main": [
-        [{ "node": "Scan Succeeded?", "type": "main", "index": 0 }],
-        [{ "node": "Wait 15s", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Scan Succeeded?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 15s",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Wait 15s": {
       "main": [
-        [{ "node": "Poll Job Status", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Poll Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Scan Succeeded?": {
       "main": [
-        [{ "node": "Get Post-Scan Findings", "type": "main", "index": 0 }],
-        [{ "node": "Build Error Report", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Get Post-Scan Findings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Get Post-Scan Findings": {
       "main": [
-        [{ "node": "Build Scan Summary", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Build Scan Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Build Scan Summary": {
       "main": [
-        [{ "node": "Respond: Scan OK", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Respond: Scan OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Build Error Report": {
       "main": [
         [
-          { "node": "Respond: Scan Error", "type": "main", "index": 0 },
-          { "node": "Notify: Scan Error", "type": "main", "index": 0 }
+          {
+            "node": "Respond: Scan Error",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify: Scan Error",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Webhook: Dashboard": {
       "main": [
         [
-          { "node": "Get Findings (Dashboard)", "type": "main", "index": 0 },
-          { "node": "Get Test History", "type": "main", "index": 0 }
+          {
+            "node": "Get Findings (Dashboard)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Test History",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Get Findings (Dashboard)": {
       "main": [
-        [{ "node": "Build Dashboard Data", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Build Dashboard Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Get Test History": {
       "main": [
-        [{ "node": "Build Dashboard Data", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Build Dashboard Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Build Dashboard Data": {
       "main": [
-        [{ "node": "Respond: Dashboard", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Respond: Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Health Check (5 min)": {
       "main": [
-        [{ "node": "Health Check Targets", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Health Check Targets",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Health Check Targets": {
       "main": [
         [
-          { "node": "Ping DefectDojo", "type": "main", "index": 0 },
-          { "node": "Ping Prioritization", "type": "main", "index": 0 },
-          { "node": "Ping Juice Shop", "type": "main", "index": 0 },
-          { "node": "Ping DVWA", "type": "main", "index": 0 }
+          {
+            "node": "Ping DefectDojo",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ping Prioritization",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ping Juice Shop",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ping DVWA",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ping TheHive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ping Grafana",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Ping DefectDojo": {
       "main": [
-        [{ "node": "Aggregate Health", "type": "main", "index": 0 }],
-        [{ "node": "Aggregate Health", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Ping Prioritization": {
       "main": [
-        [{ "node": "Aggregate Health", "type": "main", "index": 0 }],
-        [{ "node": "Aggregate Health", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 1
+          }
+        ]
       ]
     },
     "Ping Juice Shop": {
       "main": [
-        [{ "node": "Aggregate Health", "type": "main", "index": 0 }],
-        [{ "node": "Aggregate Health", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 2
+          }
+        ],
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 2
+          }
+        ]
       ]
     },
     "Ping DVWA": {
       "main": [
-        [{ "node": "Aggregate Health", "type": "main", "index": 0 }],
-        [{ "node": "Aggregate Health", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 3
+          }
+        ],
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Ping TheHive": {
+      "main": [
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 4
+          }
+        ],
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Ping Grafana": {
+      "main": [
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 5
+          }
+        ],
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 5
+          }
+        ]
       ]
     },
     "Poll Findings (5 min)": {
       "main": [
-        [{ "node": "Get Active Findings", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Get Active Findings",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Get Active Findings": {
       "main": [
-        [{ "node": "Flatten & Enrich", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Flatten & Enrich",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Flatten & Enrich": {
       "main": [
-        [{ "node": "Priority ≥ 80 (Critical)?", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Priority \u2265 80 (Critical)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Priority ≥ 80 (Critical)?": {
+    "Priority \u2265 80 (Critical)?": {
       "main": [
-        [{ "node": "Alert: Critical", "type": "main", "index": 0 }],
-        [{ "node": "Priority ≥ 60 (High)?", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Alert: Critical",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Priority \u2265 60 (High)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Priority ≥ 60 (High)?": {
+    "Alert: Critical": {
       "main": [
-        [{ "node": "Alert: High", "type": "main", "index": 0 }],
-        [{ "node": "Log: Medium/Low", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Create TheHive Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert: High": {
+      "main": [
+        [
+          {
+            "node": "Create TheHive Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Priority \u2265 60 (High)?": {
+      "main": [
+        [
+          {
+            "node": "Alert: High",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log: Medium/Low",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Health Checks": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
@@ -747,8 +1348,14 @@
     "templateCredsSetupCompleted": false
   },
   "tags": [
-    { "name": "voc" },
-    { "name": "dashboard" },
-    { "name": "master" }
+    {
+      "name": "voc"
+    },
+    {
+      "name": "dashboard"
+    },
+    {
+      "name": "master"
+    }
   ]
 }
