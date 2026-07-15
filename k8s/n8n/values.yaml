@@ -63,5 +63,11 @@ extraEnv:
   - name: THEHIVE_URL
     value: "http://thehive-svc.voc-core.svc.cluster.local:9000"
   - name: THEHIVE_API_KEY
-    value: ""   # Set after first TheHive login; n8n workflow uses this for alert creation
+    valueFrom:
+      secretKeyRef:
+        name: thehive-creds
+        key: api-key
+        optional: true
+
+
 

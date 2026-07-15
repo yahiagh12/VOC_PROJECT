@@ -114,7 +114,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Both the nightly cron and the \"full scan\" webhook land here \u2014 always a full scan.\n// (Quick scans are routed separately via \"Set Quick Mode\".)\nconst triggerSource = $input.first()?.json?.headers ? 'webhook' : 'schedule';\nreturn [{ json: { quickMode: '0', triggerSource, startedAt: new Date().toISOString() } }];"
+        "jsCode": "// Both the nightly cron and the \"full scan\" webhook land here — always a full scan.\n// (Quick scans are routed separately via \"Set Quick Mode\".)\nconst triggerSource = $input.first()?.json?.headers ? 'webhook' : 'schedule';\nreturn [{ json: { quickMode: '0', triggerSource, startedAt: new Date().toISOString() } }];"
       },
       "id": "set-scan-mode",
       "name": "Set Scan Mode",
@@ -175,7 +175,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Extract the job name from the K8s API response\nconst jobName = $input.first().json?.metadata?.name || 'unknown';\nconst namespace = 'scanning';\nconst startedAt = new Date().toISOString();\nconst quickMode = $('Set Scan Mode')?.first()?.json?.quickMode || $('Set Quick Mode')?.first()?.json?.quickMode || '0';\n\nreturn [{\n  json: {\n    jobName,\n    namespace,\n    startedAt,\n    quickMode,\n    status: 'Running',\n    pollCount: 0,\n    maxPolls: 120\n  }\n}];"
+        "jsCode": "// Extract the job name from the K8s API response\nconst jobName = $input.first().json?.metadata?.name || 'unknown';\nconst namespace = 'scanning';\nconst startedAt = new Date().toISOString();\n\nlet quickMode = '0';\ntry {\n  quickMode = $('Set Scan Mode').first().json.quickMode;\n} catch (e) {\n  try {\n    quickMode = $('Set Quick Mode').first().json.quickMode;\n  } catch (e2) {\n    quickMode = '0';\n  }\n}\n\nreturn [{\n  json: {\n    jobName,\n    namespace,\n    startedAt,\n    quickMode,\n    status: 'Running',\n    pollCount: 0,\n    maxPolls: 120\n  }\n}];"
       },
       "id": "extract-job-name",
       "name": "Extract Job Name",
@@ -308,8 +308,7 @@
       "parameters": {
         "method": "GET",
         "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/findings/",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "authentication": "none",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -324,7 +323,16 @@
           ]
         },
         "options": {
-          "timeout": 30000
+          "timeout": 90000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Token {{ $env.DD_API_KEY }}"
+            }
+          ]
         }
       },
       "id": "dd-get-findings-post-scan",
@@ -413,8 +421,7 @@
       "parameters": {
         "method": "GET",
         "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/findings/",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "authentication": "none",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -429,7 +436,16 @@
           ]
         },
         "options": {
-          "timeout": 30000
+          "timeout": 90000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Token {{ $env.DD_API_KEY }}"
+            }
+          ]
         }
       },
       "id": "dd-get-findings-dashboard",
@@ -445,8 +461,7 @@
       "parameters": {
         "method": "GET",
         "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/tests/",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "authentication": "none",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -461,7 +476,16 @@
           ]
         },
         "options": {
-          "timeout": 30000
+          "timeout": 90000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Token {{ $env.DD_API_KEY }}"
+            }
+          ]
         }
       },
       "id": "dd-get-tests",
@@ -505,7 +529,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Just hands off the list of targets \u2014 the actual pinging happens in the\n// HTTP Request nodes downstream.\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    checks: [\n      { name: 'defectdojo', url: 'http://defectdojo-django.voc-core.svc.cluster.local/' },\n      { name: 'prioritization', url: 'http://prioritization-service.voc-core.svc.cluster.local:8000/healthz' },\n      { name: 'juice-shop', url: 'http://juice-shop.targets.svc.cluster.local:3000/' },\n      { name: 'dvwa', url: 'http://dvwa.targets.svc.cluster.local/' },\n      { name: 'thehive', url: 'http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public' },\n      { name: 'grafana', url: 'http://kps-grafana.monitoring.svc.cluster.local/api/health' }\n    ]\n  }\n}];"
+        "jsCode": "// Just hands off the list of targets — the actual pinging happens in the\n// HTTP Request nodes downstream.\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    checks: [\n      { name: 'defectdojo', url: 'http://defectdojo-django.voc-core.svc.cluster.local/' },\n      { name: 'prioritization', url: 'http://prioritization-service.voc-core.svc.cluster.local:8000/healthz' },\n      { name: 'juice-shop', url: 'http://juice-shop.targets.svc.cluster.local:3000/' },\n      { name: 'dvwa', url: 'http://dvwa.targets.svc.cluster.local/' },\n      { name: 'thehive', url: 'http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public' },\n      { name: 'grafana', url: 'http://kps-grafana.monitoring.svc.cluster.local/api/health' }\n    ]\n  }\n}];"
       },
       "id": "health-list",
       "name": "Health Check Targets",
@@ -605,8 +629,7 @@
       "parameters": {
         "method": "GET",
         "url": "http://defectdojo-django.voc-core.svc.cluster.local/api/v2/findings/",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
+        "authentication": "none",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -621,7 +644,16 @@
           ]
         },
         "options": {
-          "timeout": 30000
+          "timeout": 90000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Token {{ $env.DD_API_KEY }}"
+            }
+          ]
         }
       },
       "id": "dd-poll-findings",
@@ -670,7 +702,7 @@
         "options": {}
       },
       "id": "if-critical",
-      "name": "Priority \u2265 80 (Critical)?",
+      "name": "Priority ≥ 80 (Critical)?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
@@ -702,7 +734,7 @@
         "options": {}
       },
       "id": "if-high",
-      "name": "Priority \u2265 60 (High)?",
+      "name": "Priority ≥ 60 (High)?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
@@ -712,7 +744,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// CRITICAL PRIORITY \u2014 Log to execution history.\n// To wire real alerting, replace this with an HTTP Request node\n// pointing to your Slack/Discord webhook or PagerDuty.\nconst f = $input.first().json;\nconsole.log(`[VOC CRITICAL] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'critical', notified: true, channel: 'execution-log' } }];"
+        "jsCode": "// CRITICAL PRIORITY — Log to execution history.\n// To wire real alerting, replace this with an HTTP Request node\n// pointing to your Slack/Discord webhook or PagerDuty.\nconst f = $input.first().json;\nconsole.log(`[VOC CRITICAL] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'critical', notified: true, channel: 'execution-log' } }];"
       },
       "id": "alert-critical",
       "name": "Alert: Critical",
@@ -796,7 +828,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// HIGH PRIORITY \u2014 Log to execution history.\nconst f = $input.first().json;\nconsole.log(`[VOC HIGH] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'high', notified: true, channel: 'execution-log' } }];"
+        "jsCode": "// HIGH PRIORITY — Log to execution history.\nconst f = $input.first().json;\nconsole.log(`[VOC HIGH] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'high', notified: true, channel: 'execution-log' } }];"
       },
       "id": "alert-high",
       "name": "Alert: High",
@@ -809,7 +841,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// MEDIUM / LOW \u2014 Log only, no notification.\nconst f = $input.first().json;\nconsole.log(`[VOC INFO] Finding #${f.id}: ${f.title} (priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'info', notified: false } }];"
+        "jsCode": "// MEDIUM / LOW — Log only, no notification.\nconst f = $input.first().json;\nconsole.log(`[VOC INFO] Finding #${f.id}: ${f.title} (priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'info', notified: false } }];"
       },
       "id": "log-low",
       "name": "Log: Medium/Low",
@@ -1258,14 +1290,14 @@
       "main": [
         [
           {
-            "node": "Priority \u2265 80 (Critical)?",
+            "node": "Priority ≥ 80 (Critical)?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Priority \u2265 80 (Critical)?": {
+    "Priority ≥ 80 (Critical)?": {
       "main": [
         [
           {
@@ -1276,7 +1308,7 @@
         ],
         [
           {
-            "node": "Priority \u2265 60 (High)?",
+            "node": "Priority ≥ 60 (High)?",
             "type": "main",
             "index": 0
           }
@@ -1305,7 +1337,7 @@
         ]
       ]
     },
-    "Priority \u2265 60 (High)?": {
+    "Priority ≥ 60 (High)?": {
       "main": [
         [
           {

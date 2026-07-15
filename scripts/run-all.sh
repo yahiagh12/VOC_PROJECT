@@ -138,6 +138,18 @@ kubectl wait --for=condition=Ready pod -n targets --all --timeout=120s 2>/dev/nu
   && log_success "Targets are ready!" \
   || log_warning "Some targets not ready"
 
+log_info "Waiting for TheHive to be ready (up to 5 min)..."
+for i in $(seq 1 60); do
+  if kubectl get pods -n voc-core --no-headers 2>/dev/null | grep "thehive" | grep -q "1/1.*Running"; then
+    log_success "TheHive is ready!"
+    break
+  fi
+  sleep 5
+  printf "."
+done
+echo ""
+
+
 # ==========================================
 # PHASE 4: GET API KEY (auto-fetched)
 # ==========================================
@@ -166,12 +178,38 @@ if [ -n "$FETCHED_KEY" ]; then
   if grep -q '^DD_API_KEY=' /workspace/.env 2>/dev/null; then
     sed -i "s|^DD_API_KEY=.*|DD_API_KEY=$FETCHED_KEY|" /workspace/.env
   fi
-else
-  log_warning "Could not auto-fetch API key. You may need to set DD_API_KEY manually."
-  log_warning "  1. Log into DefectDojo at http://localhost:8080"
-  log_warning "  2. Go to your user icon -> API v2 Key"
-  log_warning "  3. Update DD_API_KEY in /workspace/.env"
 fi
+
+# Auto-fetch the real API key from the running TheHive instance
+log_info "Fetching TheHive API key from cluster..."
+THEHIVE_KEY=""
+for attempt in $(seq 1 10); do
+  THEHIVE_KEY=$(kubectl exec deploy/thehive -n voc-core -c thehive -- \
+    curl -s -X POST -u admin@thehive.local:secret http://localhost:9000/api/v1/user/admin@thehive.local/key/renew 2>/dev/null) || true
+  if [[ "$THEHIVE_KEY" =~ ^[a-zA-Z0-9]{32}$ ]]; then
+    break
+  fi
+  THEHIVE_KEY=""
+  sleep 3
+done
+
+if [ -n "$THEHIVE_KEY" ]; then
+  export THEHIVE_API_KEY="$THEHIVE_KEY"
+  log_success "TheHive API key fetched: ${THEHIVE_KEY:0:8}..."
+  # Provision the secret in voc-core namespace for n8n to read
+  kubectl -n voc-core create secret generic thehive-creds \
+    --from-literal=api-key="$THEHIVE_KEY" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1
+  # Update the .env file so the user can use it
+  if grep -q '^THEHIVE_API_KEY=' /workspace/.env 2>/dev/null; then
+    sed -i "s|^THEHIVE_API_KEY=.*|THEHIVE_API_KEY=$THEHIVE_KEY|" /workspace/.env
+  else
+    echo "THEHIVE_API_KEY=$THEHIVE_KEY" >> /workspace/.env
+  fi
+else
+  log_warning "Could not auto-fetch TheHive API key. n8n workflow alerts might fail."
+fi
+
 
 # ==========================================
 # PHASE 5: PORT FORWARDS (background)
