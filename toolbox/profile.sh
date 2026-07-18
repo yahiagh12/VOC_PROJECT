@@ -4,6 +4,25 @@
 export KUBECONFIG="${KUBECONFIG:-/workspace/.kube/config}"
 export REPO_DIR="/workspace"
 
+_voc_start_pf() {
+  local ns="$1" svc="$2" ports="$3"
+  local local_port="${ports%%:*}"
+
+  # Kill any existing port-forward process for this local port using Python
+  python3 -c "import os, signal
+for p in os.listdir('/proc'):
+  if p.isdigit():
+    try:
+      cmd = open(f'/proc/{p}/cmdline').read()
+      if 'port-forward' in cmd and '${local_port}:' in cmd:
+        os.kill(int(p), signal.SIGTERM)
+    except:
+      pass" 2>/dev/null || true
+
+  # Start the new port-forward in the background
+  nohup kubectl port-forward --address 0.0.0.0 -n "$ns" "svc/$svc" "$ports" >/dev/null 2>&1 &
+}
+
 voc_up() {
   bash "$REPO_DIR/scripts/k3d-up.sh"
 }
@@ -58,6 +77,8 @@ voc_deploy() {
         kubectl delete statefulset defectdojo-postgresql -n voc-core || true
         helm upgrade --install defectdojo defectdojo/defectdojo -n voc-core --create-namespace -f "$REPO_DIR/k8s/defectdojo/values.yaml"
       fi
+      echo "[VOC] Establishing DefectDojo port-forward..."
+      _voc_start_pf voc-core defectdojo-django 8080:80
       ;;
     n8n)
       voc_helm_repo_add community-charts https://community-charts.github.io/helm-charts
@@ -65,10 +86,68 @@ voc_deploy() {
       helm upgrade --install n8n community-charts/n8n -n voc-core \
         --create-namespace -f "$REPO_DIR/k8s/n8n/values.yaml"
       kubectl apply -f "$REPO_DIR/k8s/n8n/n8n-rbac.yaml"
+      
+      echo "[VOC] Configuring n8n credentials and importing workflow..."
+      local attempt=1
+      while [ $attempt -le 15 ]; do
+        local n8n_pod
+        n8n_pod=$(kubectl get pods -n voc-core -l app.kubernetes.io/name=n8n --no-headers 2>/dev/null | grep -v postgresql | grep "Running" | head -n 1 | awk '{print $1}')
+        if [ -n "$n8n_pod" ]; then
+          # 1. Provision TheHive credentials using vocadmin (org-admin) user
+          if ! kubectl get secret thehive-creds -n voc-core > /dev/null 2>&1; then
+            # Create the 'voc' org if it doesn't exist
+            kubectl exec deploy/thehive -n voc-core -c thehive -- \
+              curl -sf -X POST -u admin@thehive.local:secret \
+              -H 'Content-Type: application/json' \
+              http://localhost:9000/api/v1/organisation \
+              -d '{"name":"voc","description":"VOC Security Operations"}' > /dev/null 2>&1 || true
+            # Create vocadmin user with org-admin profile (has manageAlert/create)
+            kubectl exec deploy/thehive -n voc-core -c thehive -- \
+              curl -sf -X POST -u admin@thehive.local:secret \
+              -H 'Content-Type: application/json' \
+              http://localhost:9000/api/v1/user \
+              -d '{"login":"vocadmin@thehive.local","name":"VOC Admin","profile":"org-admin","organisation":"voc","password":"vocadmin123"}' > /dev/null 2>&1 || true
+            # Generate API key for vocadmin
+            local thehive_key
+            thehive_key=$(kubectl exec deploy/thehive -n voc-core -c thehive -- \
+              curl -sf -X POST -u admin@thehive.local:secret \
+              http://localhost:9000/api/v1/user/vocadmin@thehive.local/key/renew 2>/dev/null) || thehive_key=""
+            if [[ "$thehive_key" =~ ^[a-zA-Z0-9/+=]{20,64}$ ]]; then
+              kubectl -n voc-core create secret generic thehive-creds \
+                --from-literal=api-key="$thehive_key" \
+                --dry-run=client -o yaml | kubectl apply -f - > /dev/null 2>&1
+              echo "[VOC] TheHive vocadmin key provisioned"
+            fi
+          fi
+          
+          # 2. Copy and import workflow
+          kubectl cp "$REPO_DIR/n8n-workflows/voc-master-dashboard.json" "voc-core/$n8n_pod:/tmp/voc-master-dashboard.json" 2>/dev/null || true
+          kubectl exec -n voc-core "$n8n_pod" -- n8n import:workflow --input=/tmp/voc-master-dashboard.json >/dev/null 2>&1 || true
+          kubectl exec -n voc-core "$n8n_pod" -- n8n publish:workflow --id=VdT8S1MTBinkKnEH >/dev/null 2>&1 || true
+          # 3. Establish port-forward on the active pod
+          echo "[VOC] Establishing n8n port-forward on :5678..."
+          _voc_start_pf voc-core n8n 5678:5678
+          
+          # 4. Verify accessibility and restart ONLY if broken
+          sleep 2
+          if ! curl -s -o /dev/null -w "%{http_code}" http://localhost:5678/healthz | grep -q "200"; then
+            echo "[VOC] n8n is not accessible! Performing recovery restart..."
+            kubectl rollout restart deployment/n8n -n voc-core > /dev/null 2>&1 || true
+            kubectl rollout status deployment/n8n -n voc-core --timeout=60s > /dev/null 2>&1 || true
+            _voc_start_pf voc-core n8n 5678:5678
+          fi
+          echo "[VOC] n8n is accessible at http://localhost:5678"
+          break
+        fi
+        sleep 2
+        attempt=$((attempt + 1))
+      done
       ;;
     thehive)
       echo "[VOC] Deploying TheHive 5 (lightweight, no Cassandra)..."
       kubectl apply -f "$REPO_DIR/k8s/thehive/thehive-deployment.yaml"
+      echo "[VOC] Establishing TheHive port-forward..."
+      _voc_start_pf voc-core thehive-svc 9000:9000
       ;;
     targets)
       kubectl apply -f "$REPO_DIR/k8s/targets/"

@@ -1,3 +1,4 @@
+imagePullPolicy: IfNotPresent
 # DefectDojo Helm chart values — low-resource profile for <=16GB RAM labs.
 #
 # Add the repo:
@@ -95,3 +96,7 @@ django:
 
 initializer:
   enabled: true
+valkey:
+  image:
+    digest: ""
+    pullPolicy: IfNotPresent

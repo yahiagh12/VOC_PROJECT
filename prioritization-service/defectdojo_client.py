@@ -61,8 +61,9 @@ class DefectDojoClient:
         active: bool = True,
         verified: bool | None = None,
         limit: int = 200,
+        o: str = "-id",
     ) -> Iterator[dict]:
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit, "o": o}
         if active:
             params["active"] = "true"
         if verified is not None:
@@ -94,14 +95,42 @@ class DefectDojoClient:
         priority: int,
         *,
         existing_tags: list[str] | None = None,
+        existing_risk_score: float | None = None,
+        existing_severity: str | None = None,
         tag_prefix: str = "priority",
         set_risk_score: bool = True,
+        set_severity: bool = True,
+        priority_band_func: callable | None = None,
     ) -> dict:
         if existing_tags is None:
-            existing_tags = (self.get_finding(finding_id).get("tags") or [])
+            finding = self.get_finding(finding_id)
+            existing_tags = finding.get("tags") or []
+            existing_risk_score = finding.get("risk_score")
+            existing_severity = finding.get("severity")
+
+        target_tag = f"{tag_prefix}-{priority}"
+        target_severity = priority_band_func(priority).capitalize() if priority_band_func and set_severity else None
+        
+        needs_update = False
+        if not existing_tags or target_tag not in existing_tags:
+            needs_update = True
+        elif set_risk_score and (existing_risk_score is None or float(existing_risk_score) != float(priority)):
+            needs_update = True
+        elif target_severity and existing_severity != target_severity:
+            needs_update = True
+            
+        if not needs_update:
+            return {}
+
         kept = [t for t in existing_tags if not (isinstance(t, str) and t.startswith(f"{tag_prefix}-"))]
-        kept.append(f"{tag_prefix}-{priority}")
+        kept.append(target_tag)
         payload: dict[str, Any] = {"tags": kept}
         if set_risk_score:
             payload["risk_score"] = float(priority)
+        if target_severity:
+            payload["severity"] = target_severity
+            
         return self.update_finding(finding_id, payload)
+
+    def mark_duplicate(self, finding_id: int) -> dict:
+        return self.update_finding(finding_id, {"active": False, "verified": False, "duplicate": True})

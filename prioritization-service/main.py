@@ -46,6 +46,32 @@ def run_scoring_pass() -> dict:
             findings = list(dd.list_findings(active=True))
             log.info("Loaded %d active findings from DefectDojo", len(findings))
 
+            # Deduplication
+            title_to_fids: dict[str, list[dict]] = {}
+            for f in findings:
+                title_key = (f.get("title") or "").strip().lower()
+                title_to_fids.setdefault(title_key, []).append(f)
+
+            primary_findings = []
+            for title_key, group in title_to_fids.items():
+                if not title_key:
+                    primary_findings.extend(group)
+                    continue
+                # Sort by id so we keep the lowest id as primary
+                group.sort(key=lambda x: x["id"])
+                primary_findings.append(group[0])
+                for dup in group[1:]:
+                    try:
+                        dd.mark_duplicate(dup["id"])
+                        skipped += 1
+                        log.info("Marked finding %s as duplicate of %s", dup["id"], group[0]["id"])
+                    except Exception as exc:
+                        errors += 1
+                        log.warning("Failed to mark finding %s as duplicate: %s", dup["id"], exc)
+            
+            findings = primary_findings
+            log.info("Proceeding to score %d primary active findings", len(findings))
+
             cve_to_fids: dict[str, list[int]] = {}
             non_cve_fids: list[int] = []
             for f in findings:
@@ -84,12 +110,18 @@ def run_scoring_pass() -> dict:
                         epss_weight=settings.epss_weight,
                     )
                     try:
-                        dd.set_priority(
+                        res = dd.set_priority(
                             fid,
                             priority,
                             existing_tags=src.get("tags") or [],
+                            existing_risk_score=src.get("risk_score"),
+                            existing_severity=src.get("severity"),
+                            priority_band_func=priority_band,
                         )
-                        scored += 1
+                        if res:  # Only count as scored if we actually made a PATCH request
+                            scored += 1
+                        else:
+                            skipped += 1
                         log.debug(
                             "finding=%s cve=%s priority=%d band=%s (%s)",
                             fid, cve or "none", priority, priority_band(priority), note,

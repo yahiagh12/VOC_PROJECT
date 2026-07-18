@@ -221,19 +221,15 @@ if [ "$DD_READY" -eq 0 ]; then
   log_warning "Skipping port-forwards — DefectDojo is not ready yet."
   log_warning "Once pods are Running, run: voc-run-all"
 else
-  # Kill any existing port-forwards
-  pkill -f "kubectl port-forward" 2>/dev/null || true
-  sleep 1
-
-  # Launch all port-forwards simultaneously
+  # Launch all port-forwards simultaneously (killing existing ones for these ports first)
   log_info "Starting port-forwards (DefectDojo:8080, n8n:5678, Juice Shop:3000, TheHive:9000)..."
-  kubectl port-forward --address 0.0.0.0 -n voc-core svc/defectdojo-django 8080:80 >/dev/null 2>&1 &
-  kubectl port-forward --address 0.0.0.0 -n voc-core svc/n8n 5678:5678 >/dev/null 2>&1 &
-  kubectl port-forward --address 0.0.0.0 -n targets svc/juice-shop 3000:3000 >/dev/null 2>&1 &
-  kubectl port-forward --address 0.0.0.0 -n voc-core svc/thehive-svc 9000:9000 >/dev/null 2>&1 &
+  _voc_start_pf voc-core defectdojo-django 8080:80
+  _voc_start_pf voc-core n8n 5678:5678
+  _voc_start_pf targets juice-shop 3000:3000
+  _voc_start_pf voc-core thehive-svc 9000:9000
   # Grafana port-forward (monitoring namespace) — only if the service exists
   if kubectl get svc -n monitoring kps-grafana >/dev/null 2>&1; then
-    kubectl port-forward --address 0.0.0.0 -n monitoring svc/kps-grafana 3001:80 >/dev/null 2>&1 &
+    _voc_start_pf monitoring kps-grafana 3001:80
     log_info "Grafana port-forward started on :3001"
   fi
   sleep 3  # single wait for all to bind

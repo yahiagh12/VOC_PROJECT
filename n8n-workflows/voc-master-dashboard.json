@@ -1,4 +1,5 @@
 {
+  "id": "VdT8S1MTBinkKnEH",
   "name": "VOC Master Dashboard",
   "nodes": [
     {
@@ -432,6 +433,10 @@
             {
               "name": "limit",
               "value": "500"
+            },
+            {
+              "name": "o",
+              "value": "numerical_severity,-id"
             }
           ]
         },
@@ -499,7 +504,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const findingsResp = $('Get Findings (Dashboard)').first()?.json || {};\nconst testsResp = $('Get Test History').first()?.json || {};\n\nconst findings = findingsResp.results || [];\nconst tests = testsResp.results || [];\n\n// --- Severity breakdown ---\nconst bySeverity = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };\nconst byScanner = {};\nconst byTarget = {};\n\nfor (const f of findings) {\n  const sev = f.severity || 'Info';\n  bySeverity[sev] = (bySeverity[sev] || 0) + 1;\n  const tags = f.tags || [];\n  for (const t of tags) {\n    if (['nuclei','sqlmap','ffuf','xss','grype','xsstrike','crawler'].includes(t)) {\n      byScanner[t] = (byScanner[t] || 0) + 1;\n    }\n    if (['juice-shop','dvwa','web-dvwa'].includes(t)) {\n      byTarget[t] = (byTarget[t] || 0) + 1;\n    }\n  }\n}\n\n// --- Priority distribution ---\nconst byPriority = { critical: 0, high: 0, medium: 0, low: 0, unscored: 0 };\nfor (const f of findings) {\n  let scored = false;\n  for (const t of (f.tags || [])) {\n    const m = String(t).match(/^priority-(\\d+)$/);\n    if (m) {\n      scored = true;\n      const p = parseInt(m[1]);\n      if (p >= 80) byPriority.critical++;\n      else if (p >= 60) byPriority.high++;\n      else if (p >= 40) byPriority.medium++;\n      else byPriority.low++;\n    }\n  }\n  if (!scored) byPriority.unscored++;\n}\n\n// --- Top critical findings ---\nconst topFindings = findings\n  .filter(f => f.severity === 'Critical' || f.severity === 'High')\n  .slice(0, 15)\n  .map(f => ({\n    id: f.id,\n    title: f.title,\n    severity: f.severity,\n    cve: f.cve || null,\n    verified: f.verified || false,\n    active: f.active,\n    date: f.date,\n    tags: f.tags || []\n  }));\n\n// --- Recent scan history ---\nconst scanHistory = tests.slice(0, 10).map(t => ({\n  id: t.id,\n  title: t.title,\n  scanType: t.scan_type_name || t.test_type_name,\n  updated: t.updated,\n  findingCount: t.finding_count || 0\n}));\n\n// --- MTTR estimate ---\nconst now = new Date();\nconst thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);\nlet closedCount = 0;\nlet totalResolutionDays = 0;\nfor (const f of findings) {\n  if (f.is_mitigated && f.mitigated) {\n    const created = new Date(f.date || f.created);\n    const mitigated = new Date(f.mitigated);\n    if (mitigated > thirtyDaysAgo) {\n      closedCount++;\n      totalResolutionDays += (mitigated - created) / (1000 * 60 * 60 * 24);\n    }\n  }\n}\nconst mttr = closedCount > 0 ? Math.round(totalResolutionDays / closedCount * 10) / 10 : null;\n\nconst dashboard = {\n  pipelineStatus: 'operational',\n  lastUpdated: new Date().toISOString(),\n  findings: {\n    total: findings.length,\n    totalActive: findingsResp.count || findings.length,\n    bySeverity,\n    byScanner,\n    byTarget,\n    byPriority,\n    criticalAndHigh: (bySeverity.Critical || 0) + (bySeverity.High || 0)\n  },\n  metrics: {\n    mttrDays: mttr,\n    closedLast30d: closedCount,\n    scannerCount: Object.keys(byScanner).length,\n    targetCount: Object.keys(byTarget).length\n  },\n  topFindings,\n  scanHistory\n};\n\nreturn [{ json: dashboard }];"
+        "jsCode": "const findingsResp = $('Get Findings (Dashboard)').first()?.json || {};\nconst testsResp = $('Get Test History').first()?.json || {};\n\nconst findings = findingsResp.results || [];\nconst tests = testsResp.results || [];\n\n// --- Severity breakdown ---\nconst bySeverity = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };\nconst byScanner = {};\nconst byTarget = {};\n\nfor (const f of findings) {\n  const sev = f.severity || 'Info';\n  bySeverity[sev] = (bySeverity[sev] || 0) + 1;\n  const tags = f.tags || [];\n  for (const t of tags) {\n    if (['nuclei','sqlmap','ffuf','xss','grype','xsstrike','crawler'].includes(t)) {\n      byScanner[t] = (byScanner[t] || 0) + 1;\n    }\n    if (['juice-shop','dvwa','web-dvwa'].includes(t)) {\n      byTarget[t] = (byTarget[t] || 0) + 1;\n    }\n  }\n}\n\n// --- Priority distribution ---\nconst byPriority = { critical: 0, high: 0, medium: 0, low: 0, unscored: 0 };\nfor (const f of findings) {\n  let scored = false;\n  for (const t of (f.tags || [])) {\n    const m = String(t).match(/^priority-(\\d+)$/);\n    if (m) {\n      scored = true;\n      const p = parseInt(m[1]);\n      if (p >= 80) byPriority.critical++;\n      else if (p >= 60) byPriority.high++;\n      else if (p >= 40) byPriority.medium++;\n      else byPriority.low++;\n    }\n  }\n  if (!scored) byPriority.unscored++;\n}\n\n// --- Top critical findings ---\nconst topFindings = findings\n  .filter(f => f.severity === 'Critical' || f.severity === 'High')\n  .slice(0, 15)\n  .map(f => ({\n    id: f.id,\n    title: f.title,\n    severity: f.severity,\n    cve: f.vuln_id_from_tool || null,\n    verified: f.verified || false,\n    active: f.active,\n    date: f.date,\n    tags: f.tags || []\n  }));\n\n// --- Recent scan history ---\nconst scanHistory = tests.slice(0, 10).map(t => ({\n  id: t.id,\n  title: t.title,\n  scanType: t.scan_type_name || t.test_type_name,\n  updated: t.updated,\n  findingCount: t.finding_count || 0\n}));\n\n// --- MTTR estimate ---\nconst now = new Date();\nconst thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);\nlet closedCount = 0;\nlet totalResolutionDays = 0;\nfor (const f of findings) {\n  if (f.is_mitigated && f.mitigated) {\n    const created = new Date(f.date || f.created);\n    const mitigated = new Date(f.mitigated);\n    if (mitigated > thirtyDaysAgo) {\n      closedCount++;\n      totalResolutionDays += (mitigated - created) / (1000 * 60 * 60 * 24);\n    }\n  }\n}\nconst mttr = closedCount > 0 ? Math.round(totalResolutionDays / closedCount * 10) / 10 : null;\n\nconst dashboard = {\n  pipelineStatus: 'operational',\n  lastUpdated: new Date().toISOString(),\n  findings: {\n    total: findings.length,\n    totalActive: findingsResp.count || findings.length,\n    bySeverity,\n    byScanner,\n    byTarget,\n    byPriority,\n    criticalAndHigh: (bySeverity.Critical || 0) + (bySeverity.High || 0)\n  },\n  metrics: {\n    mttrDays: mttr,\n    closedLast30d: closedCount,\n    scannerCount: Object.keys(byScanner).length,\n    targetCount: Object.keys(byTarget).length\n  },\n  topFindings,\n  scanHistory\n};\n\nreturn [{ json: dashboard }];"
       },
       "id": "build-dashboard",
       "name": "Build Dashboard Data",
@@ -639,7 +644,11 @@
             },
             {
               "name": "limit",
-              "value": "200"
+              "value": "500"
+            },
+            {
+              "name": "o",
+              "value": "numerical_severity,-id"
             }
           ]
         },
@@ -667,7 +676,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const findings = $input.first().json?.results || [];\nconst out = [];\n\nfor (const f of findings) {\n  const tags = (f.tags || []).map(t => String(t));\n  const pTag = tags.find(t => t.startsWith('priority-'));\n  const priority = pTag ? parseInt(pTag.split('-')[1], 10) : null;\n  out.push({\n    json: {\n      id: f.id,\n      title: f.title,\n      severity: f.severity,\n      cve: f.cve || null,\n      priority,\n      verified: f.verified || false,\n      tags,\n      date: f.date,\n      endpoints: (f.endpoints || []).slice(0, 3)\n    }\n  });\n}\n\nreturn out.length > 0 ? out : [{ json: { id: null, title: 'No active findings', severity: 'Info', priority: 0 } }];"
+        "jsCode": "const findings = $input.first().json?.results || [];\nconst out = [];\n\nfor (const f of findings) {\n  const tags = (f.tags || []).map(t => String(t));\n  const pTag = tags.find(t => t.startsWith('priority-'));\n  const priority = pTag ? parseInt(pTag.split('-')[1], 10) : null;\n  out.push({\n    json: {\n      id: f.id,\n      title: f.title,\n      severity: f.severity,\n      cve: f.vuln_id_from_tool || null,\n      priority,\n      verified: f.verified || false,\n      tags,\n      date: f.date,\n      endpoints: (f.endpoints || []).slice(0, 3)\n    }\n  });\n}\n\nreturn out.length > 0 ? out : [{ json: { id: null, title: 'No active findings', severity: 'Info', priority: 0 } }];"
       },
       "id": "flatten-findings",
       "name": "Flatten & Enrich",
@@ -764,7 +773,7 @@
           "parameters": [
             {
               "name": "Authorization",
-              "value": "Bearer {{ $env.THEHIVE_API_KEY || '' }}"
+              "value": "=Bearer {{$env.N8N_THEHIVE_API_KEY}}"
             },
             {
               "name": "Content-Type",
@@ -774,7 +783,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  type: 'voc-scan',\n  source: 'DefectDojo',\n  sourceRef: 'finding-' + $json.id,\n  title: '[VOC] ' + $json.severity + ': ' + $json.title,\n  description: 'Auto-created by VOC n8n workflow.\\nSeverity: ' + $json.severity + '\\nPriority: ' + ($json.priority || 'N/A') + '\\nCVE: ' + ($json.cve || 'N/A') + '\\nDefectDojo Finding ID: ' + $json.id,\n  severity: $json.severity === 'Critical' ? 1 : $json.severity === 'High' ? 2 : 3,\n  tags: ($json.tags || []).concat(['voc', 'auto-created']),\n  tlp: 2,\n  pap: 2\n}) }}",
+        "jsonBody": "={{ JSON.stringify({ type: 'voc-scan', source: 'DefectDojo', sourceRef: 'finding-' + $json.id, title: '[VOC] ' + $json.severity + ': ' + $json.title, description: 'Auto-created by VOC n8n workflow.\\nSeverity: ' + $json.severity + '\\nPriority: ' + ($json.priority || 'N/A') + '\\nCVE: ' + ($json.cve || 'N/A') + '\\nDefectDojo Finding ID: ' + $json.id, severity: $json.severity === 'Critical' ? 4 : $json.severity === 'High' ? 3 : $json.severity === 'Medium' ? 2 : 1, tags: ($json.tags || []).concat(['voc', 'auto-created']), tlp: 2, pap: 2 }) }}",
         "options": {
           "allowUnauthorizedCerts": true,
           "timeout": 10000
@@ -787,6 +796,89 @@
       "position": [
         660,
         1320
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/query?name=find-by-sourceref",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.N8N_THEHIVE_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: [{ _name: 'listAlert' }, { _name: 'filter', _and: [{ _field: 'sourceRef', _value: 'finding-' + $('Flatten & Enrich').item.json.id }] }] }) }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 10000
+        }
+      },
+      "id": "thehive-search-alert",
+      "name": "Search Alert by SourceRef",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        1440
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pure data transform — no HTTP.\n// Extract TheHive _id from search results, merge with original finding data.\nconst results = $input.first().json;\nconst alerts = Array.isArray(results) ? results : [];\nconst existing = alerts[0];\nif (!existing) {\n  return [{ json: { action: 'not_found' } }];\n}\nconst f = $('Flatten & Enrich').item.json;\nconst sevNum = f.severity === 'Critical' ? 4 : f.severity === 'High' ? 3 : f.severity === 'Medium' ? 2 : 1;\nreturn [{ json: {\n  alertId: existing._id,\n  title: '[VOC] ' + f.severity + ': ' + f.title,\n  description: 'Auto-created by VOC n8n workflow.\\nSeverity: ' + f.severity + '\\nPriority: ' + (f.priority || 'N/A') + '\\nCVE: ' + (f.cve || 'N/A') + '\\nDefectDojo Finding ID: ' + f.id,\n  severity: sevNum,\n  tags: (f.tags || []).concat(['voc', 'auto-created'])\n} }];"
+      },
+      "id": "thehive-extract-id",
+      "name": "Extract Alert ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        1440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/alert/{{ $json.alertId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.N8N_THEHIVE_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ title: $json.title, description: $json.description, severity: $json.severity, tags: $json.tags }) }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 10000
+        }
+      },
+      "id": "thehive-update-alert",
+      "name": "Update TheHive Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1380,
+        1440
       ],
       "onError": "continueErrorOutput"
     },

@@ -62,7 +62,7 @@ extraEnv:
         optional: true
   - name: THEHIVE_URL
     value: "http://thehive-svc.voc-core.svc.cluster.local:9000"
-  - name: THEHIVE_API_KEY
+  - name: N8N_THEHIVE_API_KEY
     valueFrom:
       secretKeyRef:
         name: thehive-creds
