@@ -19,6 +19,8 @@ for p in os.listdir('/proc'):
     except:
       pass" 2>/dev/null || true
 
+  sleep 1 # Wait for the port to be released by the kernel
+
   # Start the new port-forward in the background
   nohup kubectl port-forward --address 0.0.0.0 -n "$ns" "svc/$svc" "$ports" >/dev/null 2>&1 &
 }
@@ -86,12 +88,12 @@ voc_deploy() {
       helm upgrade --install n8n community-charts/n8n -n voc-core \
         --create-namespace -f "$REPO_DIR/k8s/n8n/values.yaml"
       kubectl apply -f "$REPO_DIR/k8s/n8n/n8n-rbac.yaml"
-      
+
       echo "[VOC] Configuring n8n credentials and importing workflow..."
       local attempt=1
       while [ $attempt -le 15 ]; do
         local n8n_pod
-        n8n_pod=$(kubectl get pods -n voc-core -l app.kubernetes.io/name=n8n --no-headers 2>/dev/null | grep -v postgresql | grep "Running" | head -n 1 | awk '{print $1}')
+        n8n_pod=$(kubectl get pods -n voc-core -l app.kubernetes.io/name=n8n --no-headers 2>/dev/null | grep -v postgresql | grep "Running" | head -n 1 | awk '{print $1}' || true)
         if [ -n "$n8n_pod" ]; then
           # 1. Provision TheHive credentials using vocadmin (org-admin) user
           if ! kubectl get secret thehive-creds -n voc-core > /dev/null 2>&1; then
@@ -119,7 +121,7 @@ voc_deploy() {
               echo "[VOC] TheHive vocadmin key provisioned"
             fi
           fi
-          
+
           # 2. Copy and import workflow
           kubectl cp "$REPO_DIR/n8n-workflows/voc-master-dashboard.json" "voc-core/$n8n_pod:/tmp/voc-master-dashboard.json" 2>/dev/null || true
           kubectl exec -n voc-core "$n8n_pod" -- n8n import:workflow --input=/tmp/voc-master-dashboard.json >/dev/null 2>&1 || true
@@ -127,7 +129,7 @@ voc_deploy() {
           # 3. Establish port-forward on the active pod
           echo "[VOC] Establishing n8n port-forward on :5678..."
           _voc_start_pf voc-core n8n 5678:5678
-          
+
           # 4. Verify accessibility and restart ONLY if broken
           sleep 2
           if ! curl -s -o /dev/null -w "%{http_code}" http://localhost:5678/healthz | grep -q "200"; then
@@ -158,7 +160,7 @@ voc_deploy() {
       docker build -t voc-orchestrator:latest -f "$REPO_DIR/orchestrator/Dockerfile" "$REPO_DIR"
       echo "[VOC] Importing image into k3d cluster '$cluster'..."
       k3d image import voc-orchestrator:latest -c "$cluster"
-      
+
       kubectl -n scanning create secret generic defectdojo-creds \
         --from-literal=url=http://defectdojo-django.voc-core.svc.cluster.local \
         --from-literal=api-key="${DD_API_KEY:-changeme}" \
@@ -189,12 +191,12 @@ voc_deploy() {
       voc_helm_repo_add prometheus-community https://prometheus-community.github.io/helm-charts
       helm repo update
       kubectl apply -f "$REPO_DIR/k8s/monitoring/" 2>/dev/null || true
-      
+
       echo "[VOC] Creating Grafana dashboard ConfigMap..."
       kubectl -n monitoring create configmap voc-grafana-dashboards \
         --from-file=voc-master.json="$REPO_DIR/k8s/monitoring/grafana-dashboard.json" \
         --dry-run=client -o yaml | kubectl apply -f -
-        
+
       helm upgrade --install kps prometheus-community/kube-prometheus-stack -n monitoring \
         --create-namespace -f "$REPO_DIR/k8s/monitoring/values.yaml"
       # Deploy VOC metrics exporter (ConfigMap with script + Deployment)
@@ -386,4 +388,3 @@ alias vs="voc_status"
 alias vscan="voc_scan"
 alias vh="voc_history"
 alias voc-test-tool="bash \$REPO_DIR/scripts/test-tool.sh"
-

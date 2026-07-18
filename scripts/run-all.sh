@@ -79,6 +79,9 @@ voc_deploy prio 2>/dev/null || log_warning "Prioritization service deploy failed
 log_info "Deploying TheHive 5..."
 voc_deploy thehive 2>/dev/null || log_warning "TheHive deploy failed (non-critical)"
 
+log_info "Deploying monitoring (Grafana + Prometheus)..."
+voc_deploy monitoring 2>/dev/null || log_warning "Monitoring deploy failed"
+
 # Pre-pull scanner images in background (overlaps with Phase 3 readiness waits).
 # This eliminates the 1-2 min cold-start penalty on the first voc-scan.
 log_info "Pre-pulling scanner images (background)..."
@@ -142,6 +145,17 @@ log_info "Waiting for TheHive to be ready (up to 5 min)..."
 for i in $(seq 1 60); do
   if kubectl get pods -n voc-core --no-headers 2>/dev/null | grep "thehive" | grep -q "1/1.*Running"; then
     log_success "TheHive is ready!"
+    break
+  fi
+  sleep 5
+  printf "."
+done
+echo ""
+
+log_info "Waiting for Grafana to be ready (up to 5 min)..."
+for i in $(seq 1 60); do
+  if kubectl get pods -n monitoring --no-headers 2>/dev/null | grep "grafana" | grep -q "Running"; then
+    log_success "Grafana is ready!"
     break
   fi
   sleep 5
