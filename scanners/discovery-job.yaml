@@ -1,6 +1,6 @@
 # Discovery job — Phase 1 of the VOC pipeline.
 #
-# Runs gospider once against __TARGET_URL__ and re-emits discovered URLs
+# Runs katana once against __TARGET_URL__ and re-emits discovered URLs
 # between ===DISCOVERY_RESULTS_START=== / ===_END=== markers so scan-all.sh
 # can harvest them via `kubectl logs`, then:
 #   - persist them locally for forensics
@@ -9,6 +9,10 @@
 #     scanners (sqlmap / xss / nuclei) mount at /targets, so every Phase 2
 #     scanner sees the SAME URL inventory rather than each tool re-crawling
 #     with its own init container.
+#
+# NOTE: uses projectdiscovery/katana (multi-arch, runs on arm64/Apple
+# Silicon) — the previous gospider image (nenadzaric/gospider) is
+# amd64-only and fails with ImagePullBackOff on arm64 k3d nodes.
 #
 # Placeholder substituted by scripts/scan-all.sh:
 #   __JOB_NAME__     : unique job name per target+run
@@ -27,19 +31,18 @@ spec:
         - name: work
           emptyDir: {}
       containers:
-        - name: gospider
-          image: nenadzaric/gospider:a4244c8
+        - name: katana
+          image: projectdiscovery/katana:v1.6.1
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -e
-              # gospider stdout prints one record per discovered link, usually
-              # in the form "URL | method | source" (pipe-delimited) or
-              # "URL -- method -- source" depending on build. We extract
-              # just the leading http(s):// token so downstream tools get
-              # a clean URL list regardless of gospider's exact format.
-              gospider -s "__TARGET_URL__" --sitemap --robots --depth 3 --js=false -q \
+              # katana -silent prints one bare URL per line on stdout.
+              # -d 3 = crawl depth 3, -fs rdn = stay on the target host,
+              # -nc = no colour codes. Grep keeps only http(s) URLs so
+              # downstream tools get a clean list regardless of format.
+              katana -u "__TARGET_URL__" -d 3 -silent -nc -fs rdn \
                 2>/dev/null \
                 | grep -oE 'https?://[^[:space:]|]+' \
                 | sort -u > /work/urls.txt || true

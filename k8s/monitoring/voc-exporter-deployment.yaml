@@ -2,6 +2,41 @@
 # Polls DefectDojo API and exposes Prometheus metrics on :9091/metrics.
 # Scraped by kube-prometheus-stack's Prometheus via the ServiceMonitor.
 ---
+# ServiceAccount + RBAC so the exporter can read the voc-scan-status
+# ConfigMap in the scanning namespace (last scan time/duration panels).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voc-metrics-exporter
+  namespace: monitoring
+  labels:
+    app: voc-metrics-exporter
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: voc-scan-status-reader
+  namespace: scanning
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["voc-scan-status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: voc-metrics-exporter-scan-status
+  namespace: scanning
+subjects:
+  - kind: ServiceAccount
+    name: voc-metrics-exporter
+    namespace: monitoring
+roleRef:
+  kind: Role
+  name: voc-scan-status-reader
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +54,7 @@ spec:
       labels:
         app: voc-metrics-exporter
     spec:
+      serviceAccountName: voc-metrics-exporter
       containers:
         - name: exporter
           image: python:3.12-alpine

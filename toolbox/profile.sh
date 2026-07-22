@@ -8,7 +8,8 @@ _voc_start_pf() {
   local ns="$1" svc="$2" ports="$3"
   local local_port="${ports%%:*}"
 
-  # Kill any existing port-forward process for this local port using Python
+  # Kill any existing port-forward process (and its supervisor loop)
+  # for this local port using Python
   python3 -c "import os, signal
 for p in os.listdir('/proc'):
   if p.isdigit():
@@ -21,8 +22,12 @@ for p in os.listdir('/proc'):
 
   sleep 1 # Wait for the port to be released by the kernel
 
-  # Start the new port-forward in the background
-  nohup kubectl port-forward --address 0.0.0.0 -n "$ns" "svc/$svc" "$ports" >/dev/null 2>&1 &
+  # Start the new port-forward in the background, wrapped in a
+  # self-healing supervisor loop: if kubectl port-forward drops
+  # (target pod restart, API blip, long-running scan saturating the
+  # tunnel), it is restarted within ~2s instead of silently breaking
+  # every localhost URL that depends on it.
+  nohup bash -c "while true; do kubectl port-forward --address 0.0.0.0 -n '$ns' 'svc/$svc' '$ports' >/dev/null 2>&1; sleep 2; done" >/dev/null 2>&1 &
 }
 
 voc_up() {
@@ -273,7 +278,6 @@ voc_prepull() {
     "parrotsec/sqlmap:7.1"
     "parrotsec/ffuf:7.1"
     "anchore/grype:v0.115.0-debug"
-    "nenadzaric/gospider:a4244c8"
     "femtopixel/xsstrike:3.1.6"
   )
   echo "[VOC] Pre-pulling ${#images[@]} scanner images (parallel)..."

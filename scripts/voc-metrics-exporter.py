@@ -43,22 +43,44 @@ metrics_text = "# No data yet\n"
 metrics_lock = threading.Lock()
 
 
-def fetch_findings() -> list[dict]:
-    """Fetch active findings from DefectDojo API."""
+def fetch_all_pages(path: str) -> list[dict]:
+    """Fetch ALL pages of a DefectDojo API list endpoint."""
     if not DD_API_KEY:
         return []
-    url = f"{DD_URL}/api/v2/findings/?active=true&limit=1000"
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Token {DD_API_KEY}",
-        "Accept": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-            return data.get("results", [])
-    except Exception as e:
-        print(f"[voc-exporter] Error fetching findings: {e}", file=sys.stderr)
-        return []
+    results: list[dict] = []
+    url = f"{DD_URL}{path}"
+    while url:
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Token {DD_API_KEY}",
+            "Accept": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
+        except Exception as e:
+            print(f"[voc-exporter] Error fetching {path}: {e}", file=sys.stderr)
+            break
+        results.extend(data.get("results", []))
+        # DRF pagination: "next" is a full URL pointing at the same host
+        # we queried, so it can be followed directly. None when done.
+        url = data.get("next") or None
+    return results
+
+
+def fetch_findings() -> list[dict]:
+    """Fetch ALL active findings from DefectDojo API (paginated)."""
+    return fetch_all_pages("/api/v2/findings/?active=true&limit=1000")
+
+
+def fetch_test_tags() -> dict[int, list[str]]:
+    """Fetch tests and map test id -> tags.
+
+    Import-scan applies tags (e.g. "web,grype,juice-shop") to the TEST,
+    not the individual findings — so scanner/target attribution must be
+    read from the finding's parent test.
+    """
+    return {t["id"]: (t.get("tags") or []) for t in fetch_all_pages("/api/v2/tests/?limit=1000") if "id" in t}
+
 
 
 def fetch_scan_status() -> dict:
@@ -94,6 +116,7 @@ def fetch_scan_status() -> dict:
 def build_metrics() -> str:
     """Build Prometheus text exposition format from DefectDojo data."""
     findings = fetch_findings()
+    test_tags = fetch_test_tags()
     scan_status = fetch_scan_status()
 
     lines: list[str] = []
@@ -110,7 +133,10 @@ def build_metrics() -> str:
         sev = f.get("severity", "Info")
         by_severity[sev] = by_severity.get(sev, 0) + 1
 
-        tags = f.get("tags", [])
+        # Tags live on the parent test (import-scan behavior) AND on the
+        # finding itself — take the union so each finding is counted once
+        # per tag even when both levels carry it.
+        tags = set(test_tags.get(f.get("test"), [])) | set(f.get("tags") or [])
         for t in tags:
             if t in scanners_set:
                 by_scanner[t] = by_scanner.get(t, 0) + 1

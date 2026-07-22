@@ -4,7 +4,7 @@ set -euo pipefail
 # ============================================================
 # VOC - Scan Pipeline (k8s-native)
 #
-# Phase 1 DISCOVERY  : gospider crawls each target once -> ConfigMap of URLs
+# Phase 1 DISCOVERY  : katana crawls each target once -> ConfigMap of URLs
 # Phase 2 EXPLOIT    : nuclei / sqlmap / xsstrike / ffuf read that ConfigMap
 # Phase 3 STORE/TRI  : every normalized result -> DefectDojo (central store)
 #                      which the prioritization-service + n8n workflow read.
@@ -87,8 +87,14 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 # Tries reimport-scan first (deduplicates against existing test). If reimport
 # returns 400/404 (no prior test exists), falls back to import-scan (creates
 # a fresh test). This makes the first-ever run succeed without manual setup.
+# The optional 4th arg is a per-target slug used in test_title so parallel
+# imports of the SAME scan_type for DIFFERENT targets (e.g. grype on
+# juice-shop vs web-dvwa) land in separate tests — otherwise reimport
+# closes the other target's findings on every run.
 dd_import() {
-  local file="$1" scan_type="$2" tags="$3"
+  local file="$1" scan_type="$2" tags="$3" test_slug="${4:-}"
+  local test_title="$scan_type"
+  [ -n "$test_slug" ] && test_title="$scan_type - $test_slug"
   local max_retries=3
 
   # Try reimport first, then import as fallback
@@ -105,7 +111,7 @@ dd_import() {
         -sS -X POST "$DD_URL/api/v2/${endpoint}/"
         -H "Authorization: Token $DD_API_KEY"
         -F "scan_type=$scan_type"
-        -F "test_title=$scan_type"
+        -F "test_title=$test_title"
         -F "file=@$file"
         -F "tags=$tags"
         --max-time 600
@@ -172,16 +178,31 @@ dd_import() {
 # wait_for_job  : poll a k8s Job until complete/failed/timeout. On failure
 #                 dump pod status + last 30 log lines so the user sees *why*
 #                 without a manual kubectl.
+#                 `kubectl get job` failing is NOT proof the job is gone —
+#                 transient API/serverlb hiccups (observed under parallel
+#                 scan load) make it return non-zero for existing jobs.
+#                 Treating that as "not found" caused the cleanup path to
+#                 delete perfectly healthy running jobs, so we require
+#                 several consecutive misses before giving up.
 wait_for_job() {
   local job_name="$1" namespace="$2" timeout_sec="$3" label="$4"
   local elapsed=0 interval=5
+  local misses=0 max_misses=6
 
   while [ "$elapsed" -lt "$timeout_sec" ]; do
-    # Check if job still exists. If it was deleted (e.g. by ttlSecondsAfterFinished), stop waiting.
+    # Check if job still exists. Only after SEVERAL consecutive misses do
+    # we conclude it was really deleted (e.g. by ttlSecondsAfterFinished).
     if ! kubectl get job "$job_name" -n "$namespace" >/dev/null 2>&1; then
-      log_warning "Job $job_name not found in namespace $namespace. Stopping wait."
-      return 1
+      misses=$((misses + 1))
+      if [ "$misses" -ge "$max_misses" ]; then
+        log_warning "Job $job_name not found in namespace $namespace after $max_misses checks. Stopping wait."
+        return 1
+      fi
+      sleep "$interval"
+      elapsed=$((elapsed + interval))
+      continue
     fi
+    misses=0
     if kubectl wait --for=condition=complete "job/$job_name" -n "$namespace" --timeout=0s 2>/dev/null; then
       return 0
     fi
@@ -296,7 +317,7 @@ run_generic_scanner() {
     log_info "$tool: 0 findings for $target_short -- keeping normalized file, skipping DefectDojo import"
   else
     log_success "$tool: $count findings for $target_short -- normalizing + pushing to DefectDojo"
-    dd_import "$norm" "$scan_type" "web,$tool,$target_short" \
+    dd_import "$norm" "$scan_type" "web,$tool,$target_short" "$tool-$target_short" \
       || log_warning "$tool: DefectDojo import failed (raw kept at $raw, normalized at $norm)"
   fi
 
@@ -347,7 +368,7 @@ DVWA_READY=$(kubectl get pods -n targets -l app=dvwa --no-headers 2>/dev/null | 
 [ "$DVWA_READY" -gt 0 ] && log_success "DVWA is running" || log_warning "DVWA not running"
 
 # ============================================================
-# Step 2: Phase 1 -- Discovery (gospider)
+# Step 2: Phase 1 -- Discovery (katana)
 #
 # Crawl each target ONCE, harvest the discovered URLs from the pod log
 # (between ===DISCOVERY_RESULTS_START=== / ===_END=== markers), split
@@ -358,7 +379,7 @@ DVWA_READY=$(kubectl get pods -n targets -l app=dvwa --no-headers 2>/dev/null | 
 # mounts at /targets. Mapping kept in TARGETS_CM (bash assoc. array).
 # ============================================================
 declare -A TARGETS_CM=()
-log_info "=== Step 2: Discovery (gospider) -- building URL inventory ==="
+log_info "=== Step 2: Discovery (katana) -- building URL inventory ==="
 
 for target_pair in "${DISCOVERY_TARGETS[@]}"; do
   target_short="${target_pair%%.*}"
@@ -393,9 +414,9 @@ for target_pair in "${DISCOVERY_TARGETS[@]}"; do
     fi
   fi
 
-  # Supplement gospider's crawl with a hand-curated seed list of known
+  # Supplement katana's crawl with a hand-curated seed list of known
   # endpoints (scanners/seed-urls.<short>.txt). This covers SPA routes,
-  # REST APIs, and auth-gated pages that gospider's static crawl misses.
+  # REST APIs, and auth-gated pages that katana's static crawl misses.
   seed_urls_file="$SCANNERS_DIR/seed-urls.${target_short}.txt"
   if [ -f "$seed_urls_file" ]; then
     before_count=$(wc -l < "$all_urls" 2>/dev/null || echo 0)
@@ -413,7 +434,7 @@ for target_pair in "${DISCOVERY_TARGETS[@]}"; do
   else
     : > "$param_urls"
   fi
-  # Gospider's static crawl misses SPA/JS-reachable and REST-API routes,
+  # Katana's static crawl misses SPA/JS-reachable and REST-API routes,
   # so param_urls.txt is often empty even on real targets. Fall back to a
   # hand-curated seed list (scanners/seed-params.<short>.txt) of known
   # parameter-bearing endpoints so sqlmap/xss still have something to
@@ -537,7 +558,7 @@ run_grype() {
       local FINDING_COUNT
       FINDING_COUNT=$(jq '.matches | length' "$GRYPE_REPORT" 2>/dev/null || echo "?")
       log_success "Grype found $FINDING_COUNT vulnerabilities in $IMAGE_SHORT"
-      dd_import "$GRYPE_REPORT" "Anchore Grype" "container,grype,$IMAGE_SHORT"
+      dd_import "$GRYPE_REPORT" "Anchore Grype" "container,grype,$IMAGE_SHORT" "$IMAGE_SHORT"
 
       # Store grype findings in SQLite — convert matches to normalized format on the fly.
       # Uses jq to transform grype JSON → normalized findings JSON, then pipes to voc-db.py.
@@ -679,7 +700,7 @@ else
       if [ -s "$nuclei_report" ] && [ "$(cat "$nuclei_report")" != "[]" ]; then
         count=$(jq 'length' "$nuclei_report" 2>/dev/null || echo "?")
         log_success "Nuclei found $count findings for $target_short"
-        dd_import "$nuclei_report" "Nuclei Scan" "web,nuclei,$target_short"
+        dd_import "$nuclei_report" "Nuclei Scan" "web,nuclei,$target_short" "$target_short"
       else
         log_warning "Nuclei: no findings for $target_short -- check $nuclei_log"
       fi
@@ -930,7 +951,19 @@ SCAN_STATUS_JSON=$(cat <<EOJSON
 EOJSON
 )
 kubectl delete configmap voc-scan-status -n scanning --ignore-not-found >/dev/null 2>&1 || true
-kubectl create configmap voc-scan-status -n scanning \
-  --from-literal=status.json="$SCAN_STATUS_JSON" >/dev/null 2>&1 \
-  && log_info "Scan status written to ConfigMap voc-scan-status" \
-  || log_warning "Failed to write scan status ConfigMap"
+# Retry the write — the Grafana "Last Scan" panels read this ConfigMap,
+# and a transient API hiccup here must not blank the dashboard.
+STATUS_WRITTEN=0
+for attempt in 1 2 3 4 5; do
+  if kubectl create configmap voc-scan-status -n scanning \
+    --from-literal=status.json="$SCAN_STATUS_JSON" >/dev/null 2>&1; then
+    STATUS_WRITTEN=1
+    log_info "Scan status written to ConfigMap voc-scan-status"
+    break
+  fi
+  sleep 5
+done
+[ "$STATUS_WRITTEN" = "0" ] && log_warning "Failed to write scan status ConfigMap after 5 attempts"
+# Explicit success exit — the trailing [ ] && idiom above would otherwise
+# leave exit code 1 under `set -e` when the write succeeded.
+exit 0

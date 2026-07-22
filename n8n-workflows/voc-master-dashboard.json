@@ -115,7 +115,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Both the nightly cron and the \"full scan\" webhook land here — always a full scan.\n// (Quick scans are routed separately via \"Set Quick Mode\".)\nconst triggerSource = $input.first()?.json?.headers ? 'webhook' : 'schedule';\nreturn [{ json: { quickMode: '0', triggerSource, startedAt: new Date().toISOString() } }];"
+        "jsCode": "// Both the nightly cron and the \"full scan\" webhook land here \u2014 always a full scan.\n// (Quick scans are routed separately via \"Set Quick Mode\".)\nconst triggerSource = $input.first()?.json?.headers ? 'webhook' : 'schedule';\nreturn [{ json: { quickMode: '0', triggerSource, startedAt: new Date().toISOString() } }];"
       },
       "id": "set-scan-mode",
       "name": "Set Scan Mode",
@@ -534,7 +534,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Just hands off the list of targets — the actual pinging happens in the\n// HTTP Request nodes downstream.\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    checks: [\n      { name: 'defectdojo', url: 'http://defectdojo-django.voc-core.svc.cluster.local/' },\n      { name: 'prioritization', url: 'http://prioritization-service.voc-core.svc.cluster.local:8000/healthz' },\n      { name: 'juice-shop', url: 'http://juice-shop.targets.svc.cluster.local:3000/' },\n      { name: 'dvwa', url: 'http://dvwa.targets.svc.cluster.local/' },\n      { name: 'thehive', url: 'http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public' },\n      { name: 'grafana', url: 'http://kps-grafana.monitoring.svc.cluster.local/api/health' }\n    ]\n  }\n}];"
+        "jsCode": "// Just hands off the list of targets \u2014 the actual pinging happens in the\n// HTTP Request nodes downstream.\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    checks: [\n      { name: 'defectdojo', url: 'http://defectdojo-django.voc-core.svc.cluster.local/' },\n      { name: 'prioritization', url: 'http://prioritization-service.voc-core.svc.cluster.local:8000/healthz' },\n      { name: 'juice-shop', url: 'http://juice-shop.targets.svc.cluster.local:3000/' },\n      { name: 'dvwa', url: 'http://dvwa.targets.svc.cluster.local/' },\n      { name: 'thehive', url: 'http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public' },\n      { name: 'grafana', url: 'http://kps-grafana.monitoring.svc.cluster.local/api/health' }\n    ]\n  }\n}];"
       },
       "id": "health-list",
       "name": "Health Check Targets",
@@ -711,7 +711,7 @@
         "options": {}
       },
       "id": "if-critical",
-      "name": "Priority ≥ 80 (Critical)?",
+      "name": "Priority \u2265 80 (Critical)?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
@@ -743,7 +743,7 @@
         "options": {}
       },
       "id": "if-high",
-      "name": "Priority ≥ 60 (High)?",
+      "name": "Priority \u2265 60 (High)?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
@@ -753,7 +753,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// CRITICAL PRIORITY — Log to execution history.\n// To wire real alerting, replace this with an HTTP Request node\n// pointing to your Slack/Discord webhook or PagerDuty.\nconst f = $input.first().json;\nconsole.log(`[VOC CRITICAL] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'critical', notified: true, channel: 'execution-log' } }];"
+        "jsCode": "// CRITICAL PRIORITY \u2014 Log to execution history.\n// To wire real alerting, replace this with an HTTP Request node\n// pointing to your Slack/Discord webhook or PagerDuty.\nconst f = $input.first().json;\nconsole.log(`[VOC CRITICAL] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'critical', notified: true, channel: 'execution-log' } }];"
       },
       "id": "alert-critical",
       "name": "Alert: Critical",
@@ -836,7 +836,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Pure data transform — no HTTP.\n// Extract TheHive _id from search results, merge with original finding data.\nconst results = $input.first().json;\nconst alerts = Array.isArray(results) ? results : [];\nconst existing = alerts[0];\nif (!existing) {\n  return [{ json: { action: 'not_found' } }];\n}\nconst f = $('Flatten & Enrich').item.json;\nconst sevNum = f.severity === 'Critical' ? 4 : f.severity === 'High' ? 3 : f.severity === 'Medium' ? 2 : 1;\nreturn [{ json: {\n  alertId: existing._id,\n  title: '[VOC] ' + f.severity + ': ' + f.title,\n  description: 'Auto-created by VOC n8n workflow.\\nSeverity: ' + f.severity + '\\nPriority: ' + (f.priority || 'N/A') + '\\nCVE: ' + (f.cve || 'N/A') + '\\nDefectDojo Finding ID: ' + f.id,\n  severity: sevNum,\n  tags: (f.tags || []).concat(['voc', 'auto-created'])\n} }];"
+        "jsCode": "// Pure data transform \u2014 no HTTP.\n// Extract TheHive _id from search results, merge with original finding data.\nconst results = $input.first().json;\nconst alerts = Array.isArray(results) ? results : [];\nconst existing = alerts[0];\nif (!existing) {\n  return [{ json: { action: 'not_found' } }];\n}\nconst f = $('Flatten & Enrich').item.json;\nconst sevNum = f.severity === 'Critical' ? 4 : f.severity === 'High' ? 3 : f.severity === 'Medium' ? 2 : 1;\nreturn [{ json: {\n  alertId: existing._id,\n  title: '[VOC] ' + f.severity + ': ' + f.title,\n  description: 'Auto-created by VOC n8n workflow.\\nSeverity: ' + f.severity + '\\nPriority: ' + (f.priority || 'N/A') + '\\nCVE: ' + (f.cve || 'N/A') + '\\nDefectDojo Finding ID: ' + f.id,\n  severity: sevNum,\n  tags: (f.tags || []).concat(['voc', 'auto-created'])\n} }];"
       },
       "id": "thehive-extract-id",
       "name": "Extract Alert ID",
@@ -920,7 +920,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// HIGH PRIORITY — Log to execution history.\nconst f = $input.first().json;\nconsole.log(`[VOC HIGH] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'high', notified: true, channel: 'execution-log' } }];"
+        "jsCode": "// HIGH PRIORITY \u2014 Log to execution history.\nconst f = $input.first().json;\nconsole.log(`[VOC HIGH] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'high', notified: true, channel: 'execution-log' } }];"
       },
       "id": "alert-high",
       "name": "Alert: High",
@@ -933,7 +933,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// MEDIUM / LOW — Log only, no notification.\nconst f = $input.first().json;\nconsole.log(`[VOC INFO] Finding #${f.id}: ${f.title} (priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'info', notified: false } }];"
+        "jsCode": "// MEDIUM / LOW \u2014 Log only, no notification.\nconst f = $input.first().json;\nconsole.log(`[VOC INFO] Finding #${f.id}: ${f.title} (priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'info', notified: false } }];"
       },
       "id": "log-low",
       "name": "Log: Medium/Low",
@@ -1159,11 +1159,6 @@
             "node": "Get Findings (Dashboard)",
             "type": "main",
             "index": 0
-          },
-          {
-            "node": "Get Test History",
-            "type": "main",
-            "index": 0
           }
         ]
       ]
@@ -1172,7 +1167,7 @@
       "main": [
         [
           {
-            "node": "Build Dashboard Data",
+            "node": "Get Test History",
             "type": "main",
             "index": 0
           }
@@ -1382,14 +1377,14 @@
       "main": [
         [
           {
-            "node": "Priority ≥ 80 (Critical)?",
+            "node": "Priority \u2265 80 (Critical)?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Priority ≥ 80 (Critical)?": {
+    "Priority \u2265 80 (Critical)?": {
       "main": [
         [
           {
@@ -1400,7 +1395,7 @@
         ],
         [
           {
-            "node": "Priority ≥ 60 (High)?",
+            "node": "Priority \u2265 60 (High)?",
             "type": "main",
             "index": 0
           }
@@ -1429,7 +1424,7 @@
         ]
       ]
     },
-    "Priority ≥ 60 (High)?": {
+    "Priority \u2265 60 (High)?": {
       "main": [
         [
           {

@@ -194,12 +194,30 @@ if [ -n "$FETCHED_KEY" ]; then
   fi
 fi
 
-# Auto-fetch the real API key from the running TheHive instance
-log_info "Fetching TheHive API key from cluster..."
+# Provision a TheHive API key for n8n alert creation.
+# IMPORTANT: the platform admin (admin@thehive.local) has the "admin"
+# profile which CANNOT create alerts/cases (no manageAlert/create
+# permission). n8n must authenticate as an ORG user with the org-admin
+# profile. So: ensure the "voc" org + vocadmin user exist (idempotent,
+# using the platform admin's password auth), then renew vocadmin's key.
+log_info "Provisioning TheHive org user + API key..."
 THEHIVE_KEY=""
 for attempt in $(seq 1 10); do
+  # Org (fails silently if it already exists)
+  kubectl exec deploy/thehive -n voc-core -c thehive -- \
+    curl -sf -X POST -u admin@thehive.local:secret \
+    -H 'Content-Type: application/json' \
+    http://localhost:9000/api/v1/organisation \
+    -d '{"name":"voc","description":"VOC Security Operations"}' >/dev/null 2>&1 || true
+  # Org user with org-admin profile (has manageAlert/create)
+  kubectl exec deploy/thehive -n voc-core -c thehive -- \
+    curl -sf -X POST -u admin@thehive.local:secret \
+    -H 'Content-Type: application/json' \
+    http://localhost:9000/api/v1/user \
+    -d '{"login":"vocadmin@thehive.local","name":"VOC Admin","profile":"org-admin","organisation":"voc","password":"vocadmin123"}' >/dev/null 2>&1 || true
+  # Renew the org user's API key
   THEHIVE_KEY=$(kubectl exec deploy/thehive -n voc-core -c thehive -- \
-    curl -s -X POST -u admin@thehive.local:secret http://localhost:9000/api/v1/user/admin@thehive.local/key/renew 2>/dev/null) || true
+    curl -s -X POST -u admin@thehive.local:secret http://localhost:9000/api/v1/user/vocadmin@thehive.local/key/renew 2>/dev/null) || true
   if [[ "$THEHIVE_KEY" =~ ^[a-zA-Z0-9]{32}$ ]]; then
     break
   fi
@@ -222,6 +240,56 @@ if [ -n "$THEHIVE_KEY" ]; then
   fi
 else
   log_warning "Could not auto-fetch TheHive API key. n8n workflow alerts might fail."
+fi
+
+# ==========================================
+# PHASE 4b: SCAN ORCHESTRATOR + n8n CREDENTIALS
+# n8n triggers scans by launching the scan-orchestrator Job via the
+# K8s API. That Job needs: its image in k3d, RBAC, and the DefectDojo
+# credentials secret. n8n itself needs DD_API_KEY injected via the
+# defectdojo-creds secret — env vars are only read at pod start, so
+# n8n must be restarted AFTER the secret exists.
+# ==========================================
+log_section "PHASE 4b: Scan Orchestrator Setup"
+
+if [ -n "${DD_API_KEY:-}" ] && [ "${DD_API_KEY:-}" != "changeme" ]; then
+  log_info "Building voc-orchestrator image (for n8n-triggered scans)..."
+  if docker build -q -t voc-orchestrator:latest -f /workspace/orchestrator/Dockerfile /workspace >/dev/null 2>&1; then
+    k3d image import voc-orchestrator:latest -c "${K3D_CLUSTER_NAME:-voc}" >/dev/null 2>&1 \
+      && log_success "Orchestrator image imported into k3d" \
+      || log_warning "k3d image import failed — n8n-triggered scans may not start"
+  else
+    log_warning "Orchestrator image build failed — n8n-triggered scans may not start"
+  fi
+
+  log_info "Applying scan-orchestrator RBAC..."
+  kubectl apply -f /workspace/scanners/orchestrator-rbac.yaml >/dev/null 2>&1 || true
+
+  log_info "Provisioning DefectDojo credentials for n8n + orchestrator..."
+  for ns in voc-core scanning; do
+    kubectl -n "$ns" create secret generic defectdojo-creds \
+      --from-literal=url=http://defectdojo-django.voc-core.svc.cluster.local \
+      --from-literal=api-key="$DD_API_KEY" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1
+  done
+  log_success "defectdojo-creds secrets provisioned"
+
+  # n8n reads DD_API_KEY/N8N_THEHIVE_API_KEY from secrets at container
+  # start only — restart so the workflow's DefectDojo/TheHive calls work.
+  log_info "Restarting n8n to pick up credentials..."
+  kubectl rollout restart deployment/n8n -n voc-core >/dev/null 2>&1 || true
+  kubectl rollout status deployment/n8n -n voc-core --timeout=120s >/dev/null 2>&1 \
+    && log_success "n8n restarted with credentials" \
+    || log_warning "n8n restart timed out — check: kubectl get pods -n voc-core"
+
+  # Same for the metrics exporter (Grafana): refresh its DD key and pick
+  # up the current exporter script from the ConfigMap.
+  kubectl -n monitoring create secret generic defectdojo-creds \
+    --from-literal=api-key="$DD_API_KEY" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1
+  kubectl rollout restart deployment/voc-metrics-exporter -n monitoring >/dev/null 2>&1 || true
+else
+  log_warning "Skipping orchestrator setup — DD_API_KEY not available"
 fi
 
 

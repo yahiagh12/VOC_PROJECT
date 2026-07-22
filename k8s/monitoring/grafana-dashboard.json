@@ -12,7 +12,7 @@
       }
     ]
   },
-  "description": "VOC vulnerability management dashboard. Sourced from voc-metrics-exporter polling DefectDojo.",
+  "description": "VOC Vulnerability Operations Center — real-time vulnerability posture from DefectDojo via voc-metrics-exporter.",
   "editable": true,
   "graphTooltip": 1,
   "id": null,
@@ -25,19 +25,20 @@
           "thresholds": {
             "steps": [
               { "color": "green", "value": null },
-              { "color": "yellow", "value": 10 },
-              { "color": "orange", "value": 50 },
-              { "color": "red", "value": 100 }
+              { "color": "#EAB839", "value": 50 },
+              { "color": "orange", "value": 500 },
+              { "color": "red", "value": 1000 }
             ]
-          }
+          },
+          "mappings": []
         },
         "overrides": []
       },
       "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
       "id": 1,
       "options": {
-        "colorMode": "value",
-        "graphMode": "none",
+        "colorMode": "background",
+        "graphMode": "area",
         "justifyMode": "auto",
         "textMode": "auto",
         "reduceOptions": { "calcs": ["lastNotNull"] }
@@ -45,7 +46,7 @@
       "targets": [
         {
           "expr": "voc_findings_total",
-          "legendFormat": "Total",
+          "legendFormat": "Total Findings",
           "refId": "A"
         }
       ],
@@ -60,18 +61,19 @@
           "thresholds": {
             "steps": [
               { "color": "green", "value": null },
-              { "color": "orange", "value": 5 },
-              { "color": "red", "value": 20 }
+              { "color": "orange", "value": 10 },
+              { "color": "red", "value": 50 }
             ]
-          }
+          },
+          "mappings": []
         },
         "overrides": []
       },
       "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
       "id": 2,
       "options": {
-        "colorMode": "value",
-        "graphMode": "none",
+        "colorMode": "background",
+        "graphMode": "area",
         "justifyMode": "auto",
         "textMode": "auto",
         "reduceOptions": { "calcs": ["lastNotNull"] }
@@ -83,7 +85,7 @@
           "refId": "A"
         }
       ],
-      "title": "Critical + High Findings",
+      "title": "Critical + High",
       "type": "stat"
     },
     {
@@ -95,17 +97,19 @@
           "thresholds": {
             "steps": [
               { "color": "green", "value": null },
-              { "color": "yellow", "value": 7 },
+              { "color": "#EAB839", "value": 7 },
+              { "color": "orange", "value": 14 },
               { "color": "red", "value": 30 }
             ]
-          }
+          },
+          "mappings": []
         },
         "overrides": []
       },
       "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
       "id": 3,
       "options": {
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "auto",
         "textMode": "auto",
@@ -118,7 +122,7 @@
           "refId": "A"
         }
       ],
-      "title": "MTTR (days, 30d window)",
+      "title": "MTTR (30-day window)",
       "type": "stat"
     },
     {
@@ -130,17 +134,19 @@
           "thresholds": {
             "steps": [
               { "color": "green", "value": null },
-              { "color": "yellow", "value": 600 },
+              { "color": "#EAB839", "value": 300 },
+              { "color": "orange", "value": 600 },
               { "color": "red", "value": 1200 }
             ]
-          }
+          },
+          "mappings": []
         },
         "overrides": []
       },
       "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
       "id": 4,
       "options": {
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "auto",
         "textMode": "auto",
@@ -149,13 +155,14 @@
       "targets": [
         {
           "expr": "voc_scan_last_duration_seconds",
-          "legendFormat": "Last Scan",
+          "legendFormat": "Duration",
           "refId": "A"
         }
       ],
       "title": "Last Scan Duration",
       "type": "stat"
     },
+
     {
       "datasource": "${DS_PROM}",
       "fieldConfig": {
@@ -165,19 +172,28 @@
             "axisLabel": "Findings",
             "drawStyle": "bars",
             "fillOpacity": 80,
-            "stacking": { "mode": "normal" }
+            "stacking": { "mode": "normal" },
+            "barAlignment": 0,
+            "lineWidth": 0,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true
           }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "Critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44" } }] },
-          { "matcher": { "id": "byName", "options": "High" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830" } }] },
-          { "matcher": { "id": "byName", "options": "Medium" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A" } }] },
-          { "matcher": { "id": "byName", "options": "Low" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69" } }] },
-          { "matcher": { "id": "byName", "options": "Info" }, "properties": [{ "id": "color", "value": { "fixedColor": "#5794F2" } }] }
+          { "matcher": { "id": "byName", "options": "Critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "High" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Medium" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Low" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Info" }, "properties": [{ "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } }] }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
       "id": 5,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      },
       "targets": [
         { "expr": "voc_findings_by_severity{severity=\"Critical\"}", "legendFormat": "Critical", "refId": "A" },
         { "expr": "voc_findings_by_severity{severity=\"High\"}", "legendFormat": "High", "refId": "B" },
@@ -185,9 +201,44 @@
         { "expr": "voc_findings_by_severity{severity=\"Low\"}", "legendFormat": "Low", "refId": "D" },
         { "expr": "voc_findings_by_severity{severity=\"Info\"}", "legendFormat": "Info", "refId": "E" }
       ],
-      "title": "Open Findings by Severity",
+      "title": "Findings by Severity (over time)",
       "type": "timeseries"
     },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "High" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Medium" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Low" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Info" }, "properties": [{ "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 5 },
+      "id": 9,
+      "options": {
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        { "expr": "voc_findings_by_severity{severity=\"Critical\"}", "legendFormat": "Critical", "refId": "A" },
+        { "expr": "voc_findings_by_severity{severity=\"High\"}", "legendFormat": "High", "refId": "B" },
+        { "expr": "voc_findings_by_severity{severity=\"Medium\"}", "legendFormat": "Medium", "refId": "C" },
+        { "expr": "voc_findings_by_severity{severity=\"Low\"}", "legendFormat": "Low", "refId": "D" },
+        { "expr": "voc_findings_by_severity{severity=\"Info\"}", "legendFormat": "Info", "refId": "E" }
+      ],
+      "title": "Severity Distribution",
+      "type": "piechart"
+    },
+
     {
       "datasource": "${DS_PROM}",
       "fieldConfig": {
@@ -196,19 +247,251 @@
           "custom": {
             "axisLabel": "Findings",
             "drawStyle": "bars",
-            "fillOpacity": 80
+            "fillOpacity": 80,
+            "barAlignment": 0,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": { "mode": "normal" }
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 5 },
       "id": 6,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      },
       "targets": [
         { "expr": "voc_findings_by_scanner", "legendFormat": "{{scanner}}", "refId": "A" }
       ],
       "title": "Findings by Scanner",
       "type": "timeseries"
     },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 500 },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 14 },
+      "id": 7,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showUnfilled": true,
+        "text": {}
+      },
+      "targets": [
+        { "expr": "voc_findings_by_target", "legendFormat": "{{target}}", "refId": "A" }
+      ],
+      "title": "Findings by Target",
+      "type": "bargauge"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Findings",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "lineInterpolation": "smooth"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
+      "id": 10,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        { "expr": "voc_findings_total", "legendFormat": "Total", "refId": "A" },
+        { "expr": "voc_findings_critical_high", "legendFormat": "Critical+High", "refId": "B" }
+      ],
+      "title": "Findings Trend",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Pods",
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "voc-core" }, "properties": [{ "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "targets" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "monitoring" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "scanning" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
+      "id": 8,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "count(kube_pod_info{namespace=\"voc-core\"})",
+          "legendFormat": "voc-core",
+          "refId": "A"
+        },
+        {
+          "expr": "count(kube_pod_info{namespace=\"targets\"})",
+          "legendFormat": "targets",
+          "refId": "B"
+        },
+        {
+          "expr": "count(kube_pod_info{namespace=\"monitoring\"})",
+          "legendFormat": "monitoring",
+          "refId": "C"
+        },
+        {
+          "expr": "count(kube_pod_info{namespace=\"scanning\"})",
+          "legendFormat": "scanning",
+          "refId": "D"
+        }
+      ],
+      "title": "Cluster Pods by Namespace",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 300 },
+              { "color": "orange", "value": 600 },
+              { "color": "red", "value": 900 }
+            ]
+          },
+          "unit": "s",
+          "min": 0,
+          "max": 1500
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 22 },
+      "id": 11,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "voc_scan_last_duration_seconds",
+          "legendFormat": "Duration",
+          "refId": "A"
+        }
+      ],
+      "title": "Scan Duration Gauge",
+      "type": "gauge"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "severity" },
+            "properties": [
+              { "id": "custom.width", "value": 100 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "custom.displayMode", "value": "color-background" },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "#EAB839", "value": 10 },
+                    { "color": "orange", "value": 100 },
+                    { "color": "red", "value": 500 }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 22 },
+      "id": 12,
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Value", "desc": true }]
+      },
+      "targets": [
+        {
+          "expr": "voc_findings_by_severity",
+          "legendFormat": "{{severity}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "title": "Severity Breakdown (Table)",
+      "type": "table",
+      "transformations": [
+        {
+          "id": "reduce",
+          "options": {
+            "reducers": ["lastNotNull"]
+          }
+        }
+      ]
+    },
+
     {
       "datasource": "${DS_PROM}",
       "fieldConfig": {
@@ -217,43 +500,24 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 13 },
-      "id": 7,
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 22 },
+      "id": 13,
       "options": {
-        "displayMode": "gradient",
-        "orientation": "horizontal",
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "list", "placement": "right" },
+        "pieType": "donut",
         "reduceOptions": { "calcs": ["lastNotNull"] },
-        "showUnfilled": true
+        "tooltip": { "mode": "single" }
       },
       "targets": [
-        { "expr": "voc_findings_by_target", "legendFormat": "{{target}}", "refId": "A" }
+        { "expr": "voc_findings_by_scanner", "legendFormat": "{{scanner}}", "refId": "A" }
       ],
-      "title": "Findings by Target",
-      "type": "bargauge"
-    },
-    {
-      "datasource": "${DS_PROM}",
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 13 },
-      "id": 8,
-      "targets": [
-        {
-          "expr": "count(kube_pod_info{namespace=\"scanning\"})",
-          "legendFormat": "scanning pods",
-          "refId": "A"
-        },
-        {
-          "expr": "count(kube_pod_info{namespace=\"voc-core\"})",
-          "legendFormat": "voc-core pods",
-          "refId": "B"
-        }
-      ],
-      "title": "Cluster: Active Pods",
-      "type": "timeseries"
+      "title": "Scanner Distribution",
+      "type": "piechart"
     }
   ],
   "schemaVersion": 39,
-  "tags": ["voc"],
+  "tags": ["voc", "security", "vulnerability"],
   "templating": {
     "list": [
       {
@@ -275,11 +539,11 @@
       }
     ]
   },
-  "time": { "from": "now-7d", "to": "now" },
+  "time": { "from": "now-3h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
   "title": "VOC Overview",
   "uid": "voc-overview",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

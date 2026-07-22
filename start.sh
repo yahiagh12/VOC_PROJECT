@@ -30,7 +30,8 @@ fi
 
 # Clean up any leftover containers that might hold ports
 echo "[VOC] Cleaning up old containers..."
-docker compose down 2>/dev/null || true
+docker compose down --remove-orphans 2>/dev/null || true
+docker rm -f $(docker ps -q --filter name=voc) 2>/dev/null || true
 docker rm -f juice-shop dvwa 2>/dev/null || true
 
 # Run the toolbox: source profile, run the full setup, then drop into interactive bash

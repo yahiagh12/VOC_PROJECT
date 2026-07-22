@@ -1,4 +1,4 @@
-﻿# VOC - One Click Start
+# VOC - One Click Start
 # Double-click this file or run it in PowerShell to start everything.
 # It builds the container, enters it, deploys all services, and drops you into a shell.
 
@@ -23,7 +23,9 @@ if ($hash -ne $cached.Trim()) {
 
 # Clean up any leftover containers that might hold ports
 Write-Host "[VOC] Cleaning up old containers..." -ForegroundColor Yellow
-docker compose down 2>$null
+docker compose down --remove-orphans 2>$null
+$oldVocContainers = docker ps -q --filter name=voc
+if ($oldVocContainers) { docker rm -f $oldVocContainers 2>$null }
 docker rm -f juice-shop dvwa 2>$null
 
 # Run the toolbox: source profile, run the full setup, then drop into interactive bash
