@@ -93,7 +93,7 @@ class DefectDojoClient:
         *,
         active: bool = True,
         verified: bool | None = None,
-        limit: int = 200,
+        limit: int = 500,
         o: str = "-id",
     ) -> Iterator[dict]:
         params: dict[str, Any] = {"limit": limit, "o": o}

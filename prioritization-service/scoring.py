@@ -69,7 +69,7 @@ BANDS: tuple[tuple[int, str], ...] = (
 # Used when EPSS has nothing for a CVE, or the finding has no CVE at all.
 # Slightly below neutral: absence of evidence is not evidence of safety, but
 # it must not outweigh a measured score.
-UNKNOWN_THREAT = 0.15
+UNKNOWN_THREAT = 0.25
 
 
 @dataclass(frozen=True)

@@ -68,7 +68,7 @@ assets:
   # ---------------------------------------------------------------
   - name: dvwa
     description: "Internal HR self-service app — LAN only, no internet route"
-    business_criticality: 1
+    business_criticality: 2
     exposure: internal
     data_classification: internal
     owner: "HR IT"

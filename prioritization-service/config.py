@@ -35,14 +35,14 @@ class Settings(BaseSettings):
     # The multiplier applied to the base score. The spread is what lets a
     # MEDIUM on an internet-facing crown jewel outrank a HIGH on a throwaway
     # internal box; narrow it toward 1.0 to make context advisory instead.
-    context_min_multiplier: float = 0.5
+    context_min_multiplier: float = 0.65
     context_max_multiplier: float = 1.6
 
     # Write the score breakdown into the finding's description in DefectDojo.
     # Off by default: it is verbose, and the tags + risk score usually suffice.
     write_explanation: bool = False
 
-    run_scheduler: bool = False
+    run_scheduler: bool = True
     scoring_interval_seconds: int = 3600
 
     log_level: str = "INFO"
