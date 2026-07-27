@@ -4,6 +4,78 @@
 export KUBECONFIG="${KUBECONFIG:-/workspace/.kube/config}"
 export REPO_DIR="/workspace"
 
+# --- Feature switches -------------------------------------------------
+# Grafana/Prometheus is off by default: kube-prometheus-stack costs ~2 GB
+# of RAM plus a 20 Gi PVC, and DefectDojo + n8n already show everything
+# this lab needs. Nothing was deleted — set VOC_ENABLE_MONITORING=1 (or
+# run `voc-deploy monitoring`) to bring it back.
+export VOC_ENABLE_MONITORING="${VOC_ENABLE_MONITORING:-0}"
+# Wazuh (SIEM) is opt-in for the same reason: it is the single heaviest
+# component in the stack. `voc-deploy wazuh` or VOC_ENABLE_WAZUH=1.
+export VOC_ENABLE_WAZUH="${VOC_ENABLE_WAZUH:-0}"
+
+# ======================================================================
+# Deployment state cache
+#
+# Everything below exists to answer one question fast: "is this component
+# already deployed, from exactly these inputs, into exactly this cluster?"
+# If yes we skip the work entirely — that is where the warm-start time
+# goes (helm repo update, helm upgrade, docker build, k3d image import all
+# cost 30-90s each and are almost always no-ops).
+#
+# State is keyed on the kube-system namespace UID, so a `voc-down` +
+# `voc-up` (new cluster, new UID) invalidates every entry automatically
+# and the next start does a full deploy.
+# ======================================================================
+VOC_STATE_DIR="${VOC_STATE_DIR:-$REPO_DIR/.voc-state}"
+
+_voc_cluster_id() {
+  # Cached per shell — this is called once per component check.
+  if [ -z "${_VOC_CLUSTER_ID:-}" ]; then
+    _VOC_CLUSTER_ID=$(kubectl get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null || echo "")
+  fi
+  echo "$_VOC_CLUSTER_ID"
+}
+
+_voc_sha() {
+  # sha256 of the concatenation of the given files. A missing file is not an
+  # error: it just changes the hash, which correctly forces a redeploy. The
+  # `|| true` matters because callers run under `set -euo pipefail`, where a
+  # failing `cat` in the pipeline would otherwise abort the whole deploy.
+  { cat "$@" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1
+}
+
+# _voc_unchanged <key> <fingerprint> : 0 if this exact fingerprint was
+# already applied to this exact cluster.
+_voc_unchanged() {
+  local key="$1" fingerprint="$2"
+  local cluster; cluster=$(_voc_cluster_id)
+  [ -n "$cluster" ] || return 1
+  [ -n "$fingerprint" ] || return 1
+  [ "$(cat "$VOC_STATE_DIR/$key" 2>/dev/null)" = "${cluster}:${fingerprint}" ]
+}
+
+_voc_mark_applied() {
+  local key="$1" fingerprint="$2"
+  local cluster; cluster=$(_voc_cluster_id)
+  [ -n "$cluster" ] && [ -n "$fingerprint" ] || return 0
+  mkdir -p "$VOC_STATE_DIR"
+  printf '%s:%s' "$cluster" "$fingerprint" > "$VOC_STATE_DIR/$key"
+}
+
+# _voc_helm_deployed <release> <ns> : 0 if the release is installed and
+# in a good state (not failed / pending).
+_voc_helm_deployed() {
+  helm status "$1" -n "$2" 2>/dev/null | grep -q 'STATUS: deployed'
+}
+
+# _voc_deploy_ready <ns> <deployment> : 0 if it has at least one ready replica.
+_voc_deploy_ready() {
+  local ready
+  ready=$(kubectl get deploy "$2" -n "$1" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  [ -n "$ready" ] && [ "$ready" -ge 1 ] 2>/dev/null
+}
+
 _voc_start_pf() {
   local ns="$1" svc="$2" ports="$3"
   local local_port="${ports%%:*}"
@@ -57,6 +129,16 @@ voc_helm_repo_add() {
   local name="$1" url="$2"
   local max_attempts=3
   local attempt=1
+
+  # Already configured? Return without writing. `helm repo add` rewrites
+  # repositories.yaml wholesale, so two components deploying in parallel
+  # could otherwise clobber each other's entry. run-all.sh pre-adds every
+  # repo serially before the parallel phase; this read-only check is what
+  # makes the concurrent calls safe no-ops.
+  if helm repo list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$name"; then
+    return 0
+  fi
+
   while [ $attempt -le $max_attempts ]; do
     if helm repo add "$name" "$url" >/dev/null 2>&1; then
       return 0
@@ -69,6 +151,24 @@ voc_helm_repo_add() {
   return 1
 }
 
+# voc_helm_repo_ready <name> <url> : add the repo, and only hit the network
+# for `helm repo update` when the cached index is missing or older than
+# VOC_HELM_REPO_TTL_HOURS. `helm repo update` refreshes EVERY configured
+# repo and takes 10-30s; charts we pin do not change between two starts on
+# the same afternoon.
+VOC_HELM_REPO_TTL_HOURS="${VOC_HELM_REPO_TTL_HOURS:-24}"
+voc_helm_repo_ready() {
+  local name="$1" url="$2"
+  voc_helm_repo_add "$name" "$url" || return 1
+
+  local index="${HELM_REPOSITORY_CACHE:-/root/.cache/helm/repository}/${name}-index.yaml"
+  if [ -f "$index" ] && [ -z "$(find "$index" -mmin "+$((VOC_HELM_REPO_TTL_HOURS * 60))" 2>/dev/null)" ]; then
+    return 0
+  fi
+  echo "[VOC] Refreshing Helm repo index for '$name'..."
+  helm repo update "$name" >/dev/null 2>&1 || helm repo update >/dev/null 2>&1 || true
+}
+
 voc_deploy() {
   local target="${1:-all}"
   case "$target" in
@@ -76,20 +176,36 @@ voc_deploy() {
       kubectl apply -f "$REPO_DIR/k8s/namespaces/namespaces.yaml"
       ;;
     dd|defectdojo)
-      voc_helm_repo_add defectdojo https://raw.githubusercontent.com/DefectDojo/django-DefectDojo/helm-charts
-      helm repo update
+      # Skip the whole helm round-trip when the release is already deployed
+      # from these exact values. This is the single biggest warm-start win:
+      # a no-op `helm upgrade` on the DefectDojo chart still costs ~60-90s.
+      local dd_fp; dd_fp=$(_voc_sha "$REPO_DIR/k8s/defectdojo/values.yaml")
+      if [ "${VOC_FORCE_DEPLOY:-0}" != "1" ] && _voc_unchanged defectdojo "$dd_fp" \
+         && _voc_helm_deployed defectdojo voc-core && _voc_deploy_ready voc-core defectdojo-django; then
+        echo "[VOC] DefectDojo already deployed and unchanged — skipping"
+        _voc_start_pf voc-core defectdojo-django 8080:80
+        return 0
+      fi
+      voc_helm_repo_ready defectdojo https://raw.githubusercontent.com/DefectDojo/django-DefectDojo/helm-charts
       if ! helm upgrade --install defectdojo defectdojo/defectdojo -n voc-core --create-namespace -f "$REPO_DIR/k8s/defectdojo/values.yaml"; then
         echo "[VOC] Helm upgrade failed. If changing persistence, statefulsets cannot be patched."
         echo "[VOC] Deleting defectdojo-postgresql statefulset and retrying..."
         kubectl delete statefulset defectdojo-postgresql -n voc-core || true
         helm upgrade --install defectdojo defectdojo/defectdojo -n voc-core --create-namespace -f "$REPO_DIR/k8s/defectdojo/values.yaml"
       fi
+      _voc_mark_applied defectdojo "$dd_fp"
       echo "[VOC] Establishing DefectDojo port-forward..."
       _voc_start_pf voc-core defectdojo-django 8080:80
       ;;
     n8n)
-      voc_helm_repo_add community-charts https://community-charts.github.io/helm-charts
-      helm repo update
+      local n8n_fp; n8n_fp=$(_voc_sha "$REPO_DIR/k8s/n8n/values.yaml" "$REPO_DIR/k8s/n8n/n8n-rbac.yaml" "$REPO_DIR/n8n-workflows/voc-master-dashboard.json")
+      if [ "${VOC_FORCE_DEPLOY:-0}" != "1" ] && _voc_unchanged n8n "$n8n_fp" \
+         && _voc_helm_deployed n8n voc-core && _voc_deploy_ready voc-core n8n; then
+        echo "[VOC] n8n already deployed and unchanged (workflow already imported) — skipping"
+        _voc_start_pf voc-core n8n 5678:5678
+        return 0
+      fi
+      voc_helm_repo_ready community-charts https://community-charts.github.io/helm-charts
       helm upgrade --install n8n community-charts/n8n -n voc-core \
         --create-namespace -f "$REPO_DIR/k8s/n8n/values.yaml"
       kubectl apply -f "$REPO_DIR/k8s/n8n/n8n-rbac.yaml"
@@ -144,6 +260,7 @@ voc_deploy() {
             _voc_start_pf voc-core n8n 5678:5678
           fi
           echo "[VOC] n8n is accessible at http://localhost:5678"
+          _voc_mark_applied n8n "$n8n_fp"
           break
         fi
         sleep 2
@@ -152,9 +269,19 @@ voc_deploy() {
       ;;
     thehive)
       echo "[VOC] Deploying TheHive 5 (lightweight, no Cassandra)..."
+      # kubectl apply is cheap and idempotent, so this one always runs —
+      # but the port-forward is what actually matters on a warm start.
       kubectl apply -f "$REPO_DIR/k8s/thehive/thehive-deployment.yaml"
       echo "[VOC] Establishing TheHive port-forward..."
       _voc_start_pf voc-core thehive-svc 9000:9000
+      ;;
+    wazuh)
+      # Opt-in SIEM. Manager only — see k8s/wazuh/wazuh-manager.yaml for why.
+      echo "[VOC] Deploying Wazuh manager (SIEM)..."
+      kubectl apply -f "$REPO_DIR/k8s/wazuh/wazuh-manager.yaml"
+      echo "[VOC] Wazuh API will be available at https://localhost:55000 once ready."
+      echo "[VOC]   user: wazuh-wui  password: VocLabWazuh1!"
+      _voc_start_pf voc-core wazuh-manager 55000:55000
       ;;
     targets)
       kubectl apply -f "$REPO_DIR/k8s/targets/"
@@ -182,19 +309,51 @@ voc_deploy() {
       ;;
     prio|prioritization)
       local cluster="${K3D_CLUSTER_NAME:-voc}"
-      echo "[VOC] Building prioritization-service image..."
-      docker build -t prioritization-service:0.1.0 "$REPO_DIR/prioritization-service/"
-      echo "[VOC] Importing image into k3d cluster '$cluster'..."
-      k3d image import prioritization-service:0.1.0 -c "$cluster"
+      # docker build + k3d image import costs ~60s and is a no-op unless the
+      # service source actually changed, so gate it on a source fingerprint.
+      local prio_fp
+      prio_fp=$(_voc_sha \
+        "$REPO_DIR/prioritization-service/Dockerfile" \
+        "$REPO_DIR/prioritization-service/requirements.txt" \
+        "$REPO_DIR/prioritization-service"/*.py)
+      if [ "${VOC_FORCE_DEPLOY:-0}" = "1" ] || ! _voc_unchanged prio-image "$prio_fp"; then
+        echo "[VOC] Building prioritization-service image..."
+        docker build -t prioritization-service:0.1.0 "$REPO_DIR/prioritization-service/"
+        echo "[VOC] Importing image into k3d cluster '$cluster'..."
+        k3d image import prioritization-service:0.1.0 -c "$cluster"
+        _voc_mark_applied prio-image "$prio_fp"
+      else
+        echo "[VOC] prioritization-service image unchanged — skipping build/import"
+      fi
       # Provision the DD API key secret so the prio service can authenticate
       kubectl -n voc-core create secret generic prioritization-secrets \
         --from-literal=DEFECTDOJO_API_KEY="${DD_API_KEY:-changeme}" \
         --dry-run=client -o yaml | kubectl apply -f -
+      # Business context (asset criticality / internet exposure) lives in a
+      # ConfigMap so it can be edited and reloaded without an image rebuild.
+      kubectl -n voc-core create configmap voc-asset-inventory \
+        --from-file=asset-inventory.yaml="$REPO_DIR/prioritization-service/asset-inventory.yaml" \
+        --dry-run=client -o yaml | kubectl apply -f -
       kubectl apply -f "$REPO_DIR/prioritization-service/deployment.yaml"
+      # A ConfigMap change does not restart the pod by itself, so bounce it
+      # when the inventory or deployment spec moved — but only then, since a
+      # restart costs ~15s and drops the in-memory KEV catalogue.
+      local prio_cfg_fp
+      prio_cfg_fp=$(_voc_sha \
+        "$REPO_DIR/prioritization-service/asset-inventory.yaml" \
+        "$REPO_DIR/prioritization-service/deployment.yaml")
+      if [ "${VOC_FORCE_DEPLOY:-0}" = "1" ] || ! _voc_unchanged prio-config "$prio_cfg_fp"; then
+        kubectl rollout restart deployment/prioritization-service -n voc-core >/dev/null 2>&1 || true
+        _voc_mark_applied prio-config "$prio_cfg_fp"
+      fi
       ;;
     monitoring)
-      voc_helm_repo_add prometheus-community https://prometheus-community.github.io/helm-charts
-      helm repo update
+      # Not deployed automatically any more (see VOC_ENABLE_MONITORING at the
+      # top of this file). Running `voc-deploy monitoring` explicitly still
+      # brings the whole Grafana + Prometheus stack up exactly as before.
+      echo "[VOC] Deploying kube-prometheus-stack (Grafana + Prometheus)."
+      echo "[VOC] NOTE: this is off by default — it costs ~2 GB RAM and a 10 Gi PVC."
+      voc_helm_repo_ready prometheus-community https://prometheus-community.github.io/helm-charts
       kubectl apply -f "$REPO_DIR/k8s/monitoring/" 2>/dev/null || true
 
       echo "[VOC] Creating Grafana dashboard ConfigMap..."
@@ -214,6 +373,19 @@ voc_deploy() {
         --from-literal=api-key="${DD_API_KEY:-changeme}" \
         --dry-run=client -o yaml | kubectl apply -f -
       kubectl apply -f "$REPO_DIR/k8s/monitoring/voc-exporter-deployment.yaml" 2>/dev/null || true
+      _voc_start_pf monitoring kps-grafana 3001:80
+      echo "[VOC] Grafana: http://localhost:3001 (admin / voclab2026)"
+      ;;
+    no-monitoring|monitoring-off)
+      # Frees ~2 GB of RAM plus the Prometheus/Grafana PVCs. Files and the
+      # `voc-deploy monitoring` path are untouched, so this is reversible.
+      echo "[VOC] Removing kube-prometheus-stack (Grafana + Prometheus)..."
+      helm uninstall kps -n monitoring 2>/dev/null || echo "[VOC] No 'kps' release installed."
+      kubectl delete deployment voc-metrics-exporter -n monitoring --ignore-not-found >/dev/null 2>&1 || true
+      # Helm leaves PVCs behind by design; they are the bulk of the disk use.
+      kubectl delete pvc -n monitoring --all --ignore-not-found >/dev/null 2>&1 || true
+      rm -f "$VOC_STATE_DIR/monitoring" 2>/dev/null || true
+      echo "[VOC] Monitoring removed. Re-enable with: voc-deploy monitoring"
       ;;
     all)
       echo "[VOC] Full deployment..."
@@ -233,15 +405,15 @@ voc_deploy() {
       voc_deploy prio
       echo "[VOC] Deploying TheHive..."
       voc_deploy thehive
-      echo "[VOC] Deploying monitoring (Grafana + Prometheus)..."
-      voc_deploy monitoring
+      if [ "$VOC_ENABLE_WAZUH" = "1" ]; then echo "[VOC] Deploying Wazuh..."; voc_deploy wazuh; fi
+      if [ "$VOC_ENABLE_MONITORING" = "1" ]; then echo "[VOC] Deploying monitoring..."; voc_deploy monitoring; fi
       echo ""
       echo "[VOC] Deployment complete. Run 'voc-status' to check."
       echo "[VOC] Get DefectDojo admin password:"
       echo "  kubectl -n voc-core get secret defectdojo-django-secret -o jsonpath='{.data.DD_ADMIN_PASSWORD}' | base64 -d"
       ;;
     *)
-      echo "Usage: voc-deploy [ns|dd|n8n|thehive|targets|scanners|prio|monitoring|all]"
+      echo "Usage: voc-deploy [ns|dd|n8n|thehive|wazuh|targets|scanners|prio|monitoring|no-monitoring|all]"
       ;;
   esac
 }
@@ -280,6 +452,16 @@ voc_prepull() {
     "anchore/grype:v0.115.0-debug"
     "femtopixel/xsstrike:3.1.6"
   )
+
+  # Images live on the k3d node and survive cluster stop/start, so this only
+  # needs to run once per cluster. `k3d image import` alone costs ~60-90s for
+  # this set even when every layer is already cached locally.
+  local images_fp; images_fp=$(printf '%s\n' "${images[@]}" | sha256sum | cut -d' ' -f1)
+  if [ "${VOC_FORCE_DEPLOY:-0}" != "1" ] && _voc_unchanged prepull "$images_fp"; then
+    echo "[VOC] Scanner images already imported into '$cluster' — skipping pre-pull"
+    return 0
+  fi
+
   echo "[VOC] Pre-pulling ${#images[@]} scanner images (parallel)..."
   local pids=()
   for img in "${images[@]}"; do
@@ -292,7 +474,11 @@ voc_prepull() {
   done
   [ "$failed" -gt 0 ] && echo "[VOC] WARNING: $failed image(s) failed to pull (may already be cached)"
   echo "[VOC] Importing images into k3d cluster '$cluster'..."
-  k3d image import "${images[@]}" -c "$cluster" 2>/dev/null || echo "[VOC] WARNING: k3d image import had errors (images may already exist)"
+  if k3d image import "${images[@]}" -c "$cluster" 2>/dev/null; then
+    _voc_mark_applied prepull "$images_fp"
+  else
+    echo "[VOC] WARNING: k3d image import had errors (images may already exist)"
+  fi
   echo "[VOC] Pre-pull complete."
 }
 
@@ -340,15 +526,20 @@ VOC Toolbox Commands:
   voc-up                  Create k3d cluster + namespaces
   voc-down                Delete k3d cluster
   voc-status              Show cluster status (nodes, pods, services)
-  voc-deploy <component>  Deploy: ns, dd, n8n, thehive, targets, scanners, prio, monitoring, all
+  voc-deploy <component>  Deploy: ns, dd, n8n, thehive, wazuh, targets,
+                          scanners, prio, monitoring, no-monitoring, all
   voc-scan                Run full scan pipeline (~10-12 min)
   voc-scan --quick        Quick scan: skip nuclei + xss (~6 min)
-  voc-test-tool <tool> <target>  Run a single scanner (ffuf, sqlmap, etc.) to refine configs
+  voc-prio                Trigger a prioritization pass now
+  voc-prio-explain <id>   Show why a DefectDojo finding got its score
+  voc-assets              Show the asset inventory driving prioritization
+  voc-test-tool <tool> <target>  Run a single scanner (ffuf, sqlmap, etc.)
   voc-history             Show scan history from SQLite database
   voc-history --run <N>   Show details for a specific scan run
-  voc-prepull             Pre-pull scanner images into k3d (runs automatically on first setup)
+  voc-prepull             Pre-pull scanner images into k3d (once per cluster)
   voc-forward <ns/svc> <local:remote>  Port-forward a service
   voc-logs <ns> [pod]     Get pod logs
+  voc-refresh             Force a full redeploy on the next start
   voc-help                This message
 
 Workflow:
@@ -358,17 +549,52 @@ Workflow:
   4. voc-scan                  # run scans and import to DefectDojo
   5. voc-scan --quick          # quick iteration mode
 
+Optional components (off by default to save RAM):
+  voc-deploy wazuh             # Wazuh manager (SIEM), ~1.5 GB
+  voc-deploy monitoring        # Grafana + Prometheus, ~2 GB
+  voc-deploy no-monitoring     # tear Grafana + Prometheus back down
+  Or set VOC_ENABLE_WAZUH=1 / VOC_ENABLE_MONITORING=1 before ./start.sh
+
+Prioritization (context-aware: CVSS + EPSS + KEV x asset criticality):
+  Business context lives in prioritization-service/asset-inventory.yaml.
+  Edit it, then:  voc-deploy prio     # re-applies the ConfigMap + reloads
+
 Service URLs (after voc-deploy all):
   DefectDojo:  http://localhost:8080
   n8n:         http://localhost:5678
   Juice Shop:  http://localhost:3000
   TheHive:     http://localhost:9000
-  Grafana:     http://localhost:3001
 
 From Windows host (outside toolbox):
   $env:KUBECONFIG = "<repo-root>\.kube\config"
   kubectl get nodes
 EOF
+}
+
+# --- Prioritization helpers -------------------------------------------
+# The service is ClusterIP-only, so these run curl inside the pod rather
+# than requiring yet another port-forward.
+_voc_prio_curl() {
+  kubectl exec -n voc-core deploy/prioritization-service -- \
+    python3 -c "
+import sys, urllib.request
+req = urllib.request.Request('http://localhost:8000$1', method='$2')
+print(urllib.request.urlopen(req, timeout=120).read().decode())
+" 2>/dev/null || echo "[VOC] prioritization-service not reachable (is it deployed?)"
+}
+
+voc_prio()         { echo "[VOC] Running prioritization pass..."; _voc_prio_curl "/score" POST; }
+voc_prio_explain() {
+  [ -z "${1:-}" ] && { echo "Usage: voc-prio-explain <defectdojo-finding-id>"; return 1; }
+  _voc_prio_curl "/explain/$1" GET
+}
+voc_assets()       { _voc_prio_curl "/assets" GET; }
+
+# Drop the deployment state cache so the next start redeploys everything
+# from scratch (helm upgrades, image builds, image imports).
+voc_refresh() {
+  rm -rf "$VOC_STATE_DIR"
+  echo "[VOC] Deployment state cleared — next start will do a full redeploy."
 }
 
 # Aliases — hyphenated names (as shown in banner)
@@ -384,6 +610,10 @@ alias voc-help="voc_help"
 alias voc-run-all="voc_run_all"
 alias voc-test-tool="voc_test_tool"
 alias voc-history="voc_history"
+alias voc-prio="voc_prio"
+alias voc-prio-explain="voc_prio_explain"
+alias voc-assets="voc_assets"
+alias voc-refresh="voc_refresh"
 
 # Short aliases
 alias vu="voc_up"

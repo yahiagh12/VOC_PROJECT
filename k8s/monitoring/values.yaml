@@ -1,24 +1,49 @@
 # kube-prometheus-stack: Prometheus + Grafana + Alertmanager + node-exporter
 #
+# ⚠ DISABLED BY DEFAULT ⚠
+# The VOC startup path no longer deploys this. Grafana duplicated what
+# DefectDojo and the n8n dashboard already show, and the stack costs roughly
+# 2 GB of RAM plus PVCs on a laptop-sized cluster. Nothing here was deleted —
+# bring it back whenever you want with either of:
+#
+#   voc-deploy monitoring                 # one-off
+#   VOC_ENABLE_MONITORING=1 ./start.sh    # every start
+#
+# and take it back down with:
+#
+#   voc-deploy no-monitoring
+#
+# The values below were also trimmed so that re-enabling it is cheaper than
+# it used to be: no Alertmanager, no built-in kube alert rules, no Grafana
+# PVC (dashboards are provisioned from the voc-grafana-dashboards ConfigMap,
+# so nothing is lost when the pod restarts), and a shorter, smaller
+# Prometheus retention window.
+#
 #   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 #   helm repo update
 #   helm install kps prometheus-community/kube-prometheus-stack -n monitoring -f k8s/monitoring/values.yaml
 
+# Kubernetes-level alert rules. Nothing consumes them in this lab and they
+# are a large chunk of Prometheus' rule-evaluation load.
 defaultRules:
-  create: true
+  create: false
 
+# No alert routing in the lab — n8n handles notification.
 alertmanager:
-  enabled: true
+  enabled: false
 
 grafana:
   enabled: true
   adminPassword: "voclab2026"
+  # Dashboards come from a ConfigMap, so a restart loses nothing worth
+  # keeping and we save a PVC.
   persistence:
-    enabled: true
-    size: 5Gi
-    storageClassName: local-path
+    enabled: false
   ingress:
     enabled: false
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 300m, memory: 384Mi }
   dashboardProviders:
     dashboardproviders.yaml:
       apiVersion: 1
@@ -36,15 +61,27 @@ grafana:
 
 prometheus:
   prometheusSpec:
-    retention: 15d
+    # 7 days is plenty for a lab; 15d/20Gi was sizing for a real estate.
+    retention: 7d
+    resources:
+      requests: { cpu: 100m, memory: 512Mi }
+      limits:   { cpu: 1000m, memory: 1536Mi }
     storageSpec:
       volumeClaimTemplate:
         spec:
           storageClassName: local-path
           resources:
             requests:
-              storage: 20Gi
+              storage: 10Gi
 
+# Host-level metrics are not what this project is about, and the exporter
+# runs as a privileged DaemonSet on every node.
 prometheus-node-exporter:
-  hostRootFsMount:
-    enabled: true
+  enabled: false
+
+# Cluster object metrics — keep, they are cheap and the VOC dashboard uses
+# some of them for pod health panels.
+kube-state-metrics:
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits:   { cpu: 200m, memory: 192Mi }

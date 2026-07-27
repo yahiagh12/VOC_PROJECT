@@ -6,10 +6,28 @@ metadata:
 data:
   DEFECTDOJO_URL: "http://defectdojo-django.voc-core.svc.cluster.local"
   DEFECTDOJO_VERIFY_TLS: "false"
+
+  # --- threat intelligence ---
   EPSS_API_URL: "https://api.first.org/data/v1/epss"
+  KEV_ENABLED: "true"
+  KEV_PRIORITY_FLOOR: "70"
+
+  # --- base score weights (bug severity vs exploitation likelihood) ---
   CVSS_WEIGHT: "0.5"
   EPSS_WEIGHT: "0.5"
   EPSS_HIGH_THRESHOLD: "0.7"
+
+  # --- asset context (see asset-inventory.yaml) ---
+  ASSET_INVENTORY_PATH: "/config/asset-inventory.yaml"
+  EXPOSURE_WEIGHT: "0.4"
+  CRITICALITY_WEIGHT: "0.4"
+  DATA_WEIGHT: "0.2"
+  # Widen this spread to make business context outrank raw severity harder;
+  # set both to 1.0 to disable context entirely.
+  CONTEXT_MIN_MULTIPLIER: "0.5"
+  CONTEXT_MAX_MULTIPLIER: "1.6"
+  WRITE_EXPLANATION: "false"
+
   RUN_SCHEDULER: "true"
   SCORING_INTERVAL_SECONDS: "3600"
   LOG_LEVEL: "INFO"
@@ -43,6 +61,12 @@ spec:
                 name: prioritization-config
             - secretRef:
                 name: prioritization-secrets
+          volumeMounts:
+            # Asset inventory lives in a ConfigMap so business context can be
+            # edited + `POST /reload`ed without rebuilding the image.
+            - name: asset-inventory
+              mountPath: /config
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -62,6 +86,11 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+      volumes:
+        - name: asset-inventory
+          configMap:
+            name: voc-asset-inventory
+            optional: true
 ---
 apiVersion: v1
 kind: Service

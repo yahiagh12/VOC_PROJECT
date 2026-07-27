@@ -54,7 +54,9 @@ spec:
             - name: TH_SECRET
               value: "voc-lab-secret-change-in-production"
             - name: JAVA_OPTS
-              value: "-Xms1g -Xmx1g"
+              # Low floor / same ceiling: the JVM commits Xms up front, so a
+              # 1g floor reserved a gigabyte TheHive rarely uses in a lab.
+              value: "-Xms256m -Xmx1g"
           command: ["/opt/thehive/entrypoint"]
           args:
             - --bdb-directory

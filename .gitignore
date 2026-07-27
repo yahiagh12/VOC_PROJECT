@@ -105,6 +105,11 @@ scanners/nuclei-templates/
 config/zap-plan-auto.yaml
 # toolbox image build cache (start.ps1 optimization)
 .toolbox-build-hash
+# deployment state cache — lets a warm start skip helm upgrades, docker
+# builds and k3d image imports that would be no-ops. Keyed on the cluster
+# UID, so it self-invalidates when the cluster is recreated. Safe to delete
+# at any time (or run voc-refresh); the next start just redeploys.
+.voc-state/
 
 # ---- Misc ----
 *.log

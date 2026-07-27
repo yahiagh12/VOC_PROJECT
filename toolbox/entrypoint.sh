@@ -19,8 +19,12 @@ cat <<'BANNER'
 ║  voc-up         Create k3d cluster + namespaces          ║
 ║  voc-down       Delete k3d cluster                       ║
 ║  voc-status     Show cluster status                      ║
-║  voc-deploy     Deploy components (ns/dd/n8n/th/targets) ║
-║  voc-scan       Run scan pipeline (Grype+Nuclei)         ║
+║  voc-deploy     Deploy components (dd/n8n/thehive/prio/  ║
+║                 targets/scanners/wazuh/monitoring)       ║
+║  voc-scan       Run scan pipeline (Grype+Nuclei+DAST)    ║
+║  voc-prio       Re-prioritize findings (CVSS+EPSS+KEV    ║
+║                 weighted by asset criticality)           ║
+║  voc-assets     Show the asset inventory                 ║
 ║  voc-forward    Port-forward a service                   ║
 ║  voc-logs       Get pod logs                             ║
 ║  voc-help       Show all commands                        ║

@@ -21,10 +21,18 @@ docker network inspect "$CLUSTER_NAME" >/dev/null 2>&1 || docker network create 
 if k3d cluster list "$CLUSTER_NAME" 2>/dev/null | grep -q "$CLUSTER_NAME"; then
   echo "[VOC] Cluster '$CLUSTER_NAME' already exists."
 else
+  # Traefik and metrics-server ship enabled in k3s but nothing in VOC uses
+  # them — every service is reached through kubectl port-forward and no
+  # Ingress object exists in the repo. Disabling them saves ~250 MB of RAM
+  # and a few seconds of cluster boot. The local-path provisioner and
+  # servicelb stay: PVCs depend on the former, k3d's loadbalancer on the
+  # latter. Re-enable by dropping the --k3s-arg flags below.
   k3d cluster create "$CLUSTER_NAME" \
     --api-port "$API_PORT" \
     --network "$CLUSTER_NAME" \
     --agents 0 \
+    --k3s-arg "--disable=traefik@server:0" \
+    --k3s-arg "--disable=metrics-server@server:0" \
     --wait \
     --timeout 120s
   echo "[VOC] Cluster created."

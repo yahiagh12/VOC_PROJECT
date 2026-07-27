@@ -11,6 +11,39 @@ log = logging.getLogger(__name__)
 
 CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
 
+# Tags this service owns and rewrites on every scoring pass. Anything the
+# user or a scanner added stays untouched.
+VOC_TAG_PREFIXES = (
+    "voc-asset-",
+    "voc-exposure-",
+    "voc-crit-",
+    "voc-data-",
+    "voc-internet-facing",
+    "voc-not-internet-facing",
+)
+
+# Delimits the block we inject into a finding's description, so re-scoring
+# replaces the old explanation instead of stacking copies of it.
+EXPLANATION_START = "<!-- voc-priority-start -->"
+EXPLANATION_END = "<!-- voc-priority-end -->"
+
+
+def _is_managed_tag(tag: str, priority_prefix: str) -> bool:
+    lowered = tag.lower()
+    return lowered.startswith(f"{priority_prefix}-") or lowered.startswith(VOC_TAG_PREFIXES)
+
+
+def _with_explanation(description: str, explanation: str) -> str:
+    block = f"{EXPLANATION_START}\n**VOC priority:** {explanation}\n{EXPLANATION_END}"
+    start = description.find(EXPLANATION_START)
+    if start != -1:
+        end = description.find(EXPLANATION_END)
+        if end != -1:
+            end += len(EXPLANATION_END)
+            return (description[:start] + block + description[end:]).strip()
+        return (description[:start] + block).strip()
+    return (description.rstrip() + "\n\n" + block).strip()
+
 
 def extract_cve(finding: dict) -> str | None:
     """Pull a CVE id from a DefectDojo finding (cve field, vulnerability_ids, or title)."""
@@ -101,35 +134,72 @@ class DefectDojoClient:
         set_risk_score: bool = True,
         set_severity: bool = True,
         priority_band_func: callable | None = None,
+        context_tags: list[str] | None = None,
+        explanation: str | None = None,
+        existing_description: str | None = None,
     ) -> dict:
+        """PATCH a finding with its computed priority.
+
+        `context_tags` carry the asset context that produced the score
+        (voc-asset:, voc-exposure:, voc-crit:, ...) so the reasoning is
+        visible in the DefectDojo UI. They are managed by us: every tag in
+        the VOC_TAG_PREFIXES namespace is rewritten on each pass, so an asset
+        moving from internal to internet-facing does not leave a stale tag
+        behind. Returns {} when nothing needed changing (no wasted PATCH).
+        """
         if existing_tags is None:
             finding = self.get_finding(finding_id)
             existing_tags = finding.get("tags") or []
             existing_risk_score = finding.get("risk_score")
             existing_severity = finding.get("severity")
+            existing_description = finding.get("description")
 
         target_tag = f"{tag_prefix}-{priority}"
-        target_severity = priority_band_func(priority).capitalize() if priority_band_func and set_severity else None
-        
-        needs_update = False
-        if not existing_tags or target_tag not in existing_tags:
-            needs_update = True
-        elif set_risk_score and (existing_risk_score is None or float(existing_risk_score) != float(priority)):
-            needs_update = True
-        elif target_severity and existing_severity != target_severity:
-            needs_update = True
-            
+        managed = [target_tag, *(context_tags or [])]
+        target_severity = (
+            priority_band_func(priority).capitalize() if priority_band_func and set_severity else None
+        )
+
+        existing = [t for t in (existing_tags or []) if isinstance(t, str)]
+        # DefectDojo lowercases tags on write; compare on the same footing so
+        # an unchanged finding is not PATCHed on every single pass.
+        existing_lower = {t.lower() for t in existing}
+        needs_update = any(t.lower() not in existing_lower for t in managed)
+        if not needs_update:
+            # Any managed tag that should no longer be there (e.g. the old
+            # priority-42 after a rescore) also forces an update.
+            stale = {
+                t.lower()
+                for t in existing
+                if _is_managed_tag(t, tag_prefix) and t.lower() not in {m.lower() for m in managed}
+            }
+            needs_update = bool(stale)
+        if not needs_update and set_risk_score:
+            needs_update = existing_risk_score is None or float(existing_risk_score) != float(priority)
+        if not needs_update and target_severity:
+            needs_update = existing_severity != target_severity
+
+        new_description = None
+        if explanation is not None:
+            new_description = _with_explanation(existing_description or "", explanation)
+            if new_description == (existing_description or ""):
+                new_description = None
+            else:
+                needs_update = True
+
         if not needs_update:
             return {}
 
-        kept = [t for t in existing_tags if not (isinstance(t, str) and t.startswith(f"{tag_prefix}-"))]
-        kept.append(target_tag)
+        kept = [t for t in existing if not _is_managed_tag(t, tag_prefix)]
+        kept.extend(managed)
         payload: dict[str, Any] = {"tags": kept}
         if set_risk_score:
             payload["risk_score"] = float(priority)
         if target_severity:
             payload["severity"] = target_severity
-            
+        if new_description is not None:
+            payload["description"] = new_description
+
         return self.update_finding(finding_id, payload)
 
     def mark_duplicate(self, finding_id: int) -> dict:

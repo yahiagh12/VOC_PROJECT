@@ -27,12 +27,23 @@ services:
       - "5678:5678" # n8n
       - "3000:3000" # Juice Shop
       - "9000:9000" # TheHive
-      - "3001:3001" # Grafana
+      - "3001:3001" # Grafana   (only bound when VOC_ENABLE_MONITORING=1)
+      - "55000:55000" # Wazuh API (only bound when VOC_ENABLE_WAZUH=1)
     volumes:
       - .:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
       - voc-k3d:/root/.k3d
+      # Named volume for the Helm repo cache so chart indexes survive
+      # `docker compose down` and a warm start can skip `helm repo update`.
       - voc-helm:/root/.cache/helm
+      - voc-helm-config:/root/.config/helm
+    # Feature switches forwarded from the host shell, so
+    # `VOC_ENABLE_WAZUH=1 ./start.sh` reaches run-all.sh inside the toolbox.
+    environment:
+      VOC_ENABLE_MONITORING: "${VOC_ENABLE_MONITORING:-0}"
+      VOC_ENABLE_WAZUH: "${VOC_ENABLE_WAZUH:-0}"
+      VOC_SCAN_ON_START: "${VOC_SCAN_ON_START:-auto}"
+      VOC_FORCE_DEPLOY: "${VOC_FORCE_DEPLOY:-0}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     working_dir: /workspace
@@ -42,3 +53,4 @@ services:
 volumes:
   voc-k3d:
   voc-helm:
+  voc-helm-config:

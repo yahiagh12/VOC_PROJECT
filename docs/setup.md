@@ -89,23 +89,37 @@ kubectl get nodes
 voc-deploy all
 ```
 
-This deploys (in order):
+This deploys:
 1. Namespaces (already done by voc-up, but idempotent)
 2. DefectDojo (heaviest — bundled Postgres + Valkey + Celery + Django)
 3. n8n
 4. Lab targets (Juice Shop + DVWA in `targets` namespace)
-5. Waits for DefectDojo to be ready (up to 5 min)
-6. Scanners (Grype / ZAP / Nuclei CronJobs + DefectDojo creds secret)
-7. Prioritization service (FastAPI)
-8. Monitoring (kube-prometheus-stack + Grafana dashboard)
+5. Waits for DefectDojo to be ready
+6. Scanners (Grype / Nuclei / sqlmap / ffuf / XSStrike Jobs + DefectDojo creds secret)
+7. Prioritization service (FastAPI) + asset inventory ConfigMap
+8. TheHive
+
+Note that `./start.sh` (or `start.ps1`) runs all of this for you and deploys
+the components concurrently. A component whose inputs have not changed since
+the last apply to this cluster is skipped — run `voc-refresh`, or set
+`VOC_FORCE_DEPLOY=1`, to force a full redeploy.
 
 Or deploy individual components:
 ```bash
-voc-deploy dd          # just DefectDojo
-voc-deploy n8n         # just n8n
-voc-deploy targets     # just Juice Shop + DVWA
-voc-deploy scanners    # just scanner CronJobs
-voc-deploy monitoring  # just Prometheus + Grafana
+voc-deploy dd            # just DefectDojo
+voc-deploy n8n           # just n8n
+voc-deploy targets       # just Juice Shop + DVWA
+voc-deploy scanners      # just scanner Jobs
+voc-deploy prio          # prioritization service + asset inventory
+voc-deploy thehive       # TheHive
+```
+
+Optional components — off by default because they are the two heaviest
+things in the stack:
+```bash
+voc-deploy wazuh         # Wazuh manager (SIEM), ~1.5 GB
+voc-deploy monitoring    # Prometheus + Grafana, ~2 GB
+voc-deploy no-monitoring # remove Prometheus + Grafana again
 ```
 
 Check progress:
@@ -129,11 +143,25 @@ voc-forward voc-core/n8n 5678:5678
 # TheHive (http://localhost:9000)
 voc-forward voc-core/thehive 9000:9000
 
-# Grafana (http://localhost:3000)
-voc-forward monitoring/kps-grafana 3000:80
+# Juice Shop (http://localhost:3000)
+voc-forward targets/juice-shop 3000:3000
 
-# Juice Shop (http://localhost:3001 — from targets ns)
-kubectl port-forward -n targets svc/juice-shop 3001:3000
+# Wazuh API (https://localhost:55000) — only if deployed
+voc-forward voc-core/wazuh-manager 55000:55000
+
+# Grafana (http://localhost:3001) — only if deployed
+voc-forward monitoring/kps-grafana 3001:80
+```
+
+`./start.sh` already starts all of the default forwards in the background
+and restarts them automatically if they drop.
+
+### Inspecting prioritization
+
+```bash
+voc-assets              # asset inventory + derived context factors
+voc-prio                # run a scoring pass now
+voc-prio-explain 1234   # full breakdown for one DefectDojo finding
 ```
 
 Get the DefectDojo admin password:

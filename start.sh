@@ -28,7 +28,9 @@ else
     echo "[VOC] Toolbox image up to date (skipping build)"
 fi
 
-# Clean up any leftover containers that might hold ports
+# Clean up any leftover toolbox container that might hold the forwarded
+# ports. `docker compose down` only touches this compose project, so the
+# k3d cluster containers are untouched and survive between runs.
 echo "[VOC] Cleaning up old containers..."
 docker compose down --remove-orphans 2>/dev/null || true
 docker rm -f $(docker ps -q --filter name=voc) 2>/dev/null || true
@@ -36,7 +38,11 @@ docker rm -f juice-shop dvwa 2>/dev/null || true
 
 # Run the toolbox: source profile, run the full setup, then drop into interactive bash
 echo "[VOC] Starting toolbox and deploying everything..."
-echo "[VOC] This will take 5-10 minutes on first run."
+echo "[VOC] First run takes 5-10 min. Later starts reuse the existing cluster"
+echo "[VOC] and skip unchanged deploys — typically well under a minute."
+echo ""
+echo "[VOC] Optional: VOC_ENABLE_WAZUH=1 (SIEM)  VOC_ENABLE_MONITORING=1 (Grafana)"
+echo "[VOC]           VOC_SCAN_ON_START=1 (always scan)  VOC_FORCE_DEPLOY=1 (full redeploy)"
 echo ""
 
 docker compose run --service-ports --rm voc bash -c '
@@ -46,8 +52,10 @@ docker compose run --service-ports --rm voc bash -c '
   echo "=============================================="
   echo "  VOC is ready! You are now in the toolbox."
   echo "  Port-forwards are running in the background."
-  echo "  Type voc-scan to re-run scans."
+  echo "  Type voc-scan   to run scans."
+  echo "  Type voc-prio   to re-prioritize findings."
   echo "  Type voc-status to check the cluster."
+  echo "  Type voc-help   for everything else."
   echo "=============================================="
   echo ""
   exec bash --init-file /workspace/toolbox/profile.sh

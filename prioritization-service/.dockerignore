@@ -1,0 +1,5 @@
+# Keep the build context minimal so `docker build` layers stay cache-stable.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env

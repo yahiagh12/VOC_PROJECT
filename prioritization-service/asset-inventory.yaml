@@ -1,0 +1,78 @@
+# VOC Asset Inventory
+# =====================================================================
+# This file is the *business context* half of the prioritisation model.
+# A vulnerability's technical severity (CVSS) and its threat level (EPSS,
+# CISA KEV) say how bad the bug is; this file says how much it matters
+# THAT IT IS ON THIS PARTICULAR MACHINE.
+#
+# That is the whole point of the model: a MEDIUM finding on an
+# internet-facing payments front-end outranks a HIGH finding on an
+# internal HR box. Severity alone cannot express that; context can.
+#
+# Deployed as the ConfigMap `voc-asset-inventory` and mounted at
+# /config/asset-inventory.yaml, so you can edit + re-apply it WITHOUT
+# rebuilding the prioritization-service image:
+#
+#   kubectl -n voc-core create configmap voc-asset-inventory \
+#     --from-file=asset-inventory.yaml=prioritization-service/asset-inventory.yaml \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl -n voc-core rollout restart deploy/prioritization-service
+#
+# Fields
+# ------
+#   name                  Canonical asset id (used in the `voc-asset-<name>` tag).
+#   description           Free text — shows up in the scoring explanation.
+#   business_criticality  1..5. 5 = revenue/regulatory critical, 1 = throwaway.
+#   exposure              internet | dmz | internal | isolated
+#                         `internet` means reachable from the public internet.
+#   data_classification   financial | pii | phi | confidential | internal | public
+#   owner                 Team accountable for remediation.
+#   aliases               Strings matched against finding tags, endpoint
+#                         hostnames, container image names and titles to
+#                         attach a finding to this asset. Case-insensitive.
+# =====================================================================
+version: 1
+
+# Applied to any finding whose asset cannot be resolved. Deliberately
+# mid-range: unknown assets should not be silently deprioritised, but
+# they should not outrank a known crown-jewel either.
+defaults:
+  name: unknown
+  description: "Unclassified asset — not present in the inventory"
+  business_criticality: 3
+  exposure: internal
+  data_classification: internal
+  owner: "unassigned"
+
+assets:
+  # ---------------------------------------------------------------
+  # Stands in for a customer-facing online banking portal.
+  # Internet-exposed + handles money => every finding here is amplified.
+  # ---------------------------------------------------------------
+  - name: juice-shop
+    description: "Online banking front-end (simulated) — public customer portal, processes payments"
+    business_criticality: 5
+    exposure: internet
+    data_classification: financial
+    owner: "Payments Engineering"
+    aliases:
+      - juice-shop
+      - juiceshop
+      - juice_shop
+      - bkimminich/juice-shop
+
+  # ---------------------------------------------------------------
+  # Stands in for an internal HR self-service box. Not routable from
+  # the internet and holds no money => findings here are damped, even
+  # the technically-severe ones.
+  # ---------------------------------------------------------------
+  - name: dvwa
+    description: "Internal HR self-service app — LAN only, no internet route"
+    business_criticality: 1
+    exposure: internal
+    data_classification: internal
+    owner: "HR IT"
+    aliases:
+      - dvwa
+      - web-dvwa
+      - vulnerables/web-dvwa

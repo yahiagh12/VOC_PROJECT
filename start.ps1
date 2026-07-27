@@ -30,7 +30,14 @@ docker rm -f juice-shop dvwa 2>$null
 
 # Run the toolbox: source profile, run the full setup, then drop into interactive bash
 Write-Host "[VOC] Starting toolbox and deploying everything..." -ForegroundColor Green
-Write-Host "[VOC] This will take 5-10 minutes on first run." -ForegroundColor Yellow
+Write-Host "[VOC] First run takes 5-10 min. Later starts reuse the existing cluster" -ForegroundColor Yellow
+Write-Host "[VOC] and skip unchanged deploys - typically well under a minute." -ForegroundColor Yellow
+Write-Host ""
+Write-Host '[VOC] Optional switches (set before running this script):' -ForegroundColor DarkGray
+Write-Host '        $env:VOC_ENABLE_WAZUH=1       # Wazuh SIEM manager' -ForegroundColor DarkGray
+Write-Host '        $env:VOC_ENABLE_MONITORING=1  # Grafana + Prometheus' -ForegroundColor DarkGray
+Write-Host '        $env:VOC_SCAN_ON_START=1      # always run scans on start' -ForegroundColor DarkGray
+Write-Host '        $env:VOC_FORCE_DEPLOY=1       # ignore the deploy state cache' -ForegroundColor DarkGray
 Write-Host ""
 
 # PowerShell keeps CRLF in the here-string (this file is CRLF per
@@ -44,9 +51,11 @@ $bashScript = @"
   echo '=============================================='
   echo '  VOC is ready! You are now in the toolbox.'
   echo '  Port-forwards are running in the background.'
-  echo '  Type voc-scan to re-run scans.'
+  echo '  Type voc-scan    to run scans.'
+  echo '  Type voc-prio    to re-prioritize findings.'
   echo '  Type voc-history to view scan history.'
-  echo '  Type voc-status to check the cluster.'
+  echo '  Type voc-status  to check the cluster.'
+  echo '  Type voc-help    for everything else.'
   echo '=============================================='
   echo ''
   exec bash --init-file /workspace/toolbox/profile.sh

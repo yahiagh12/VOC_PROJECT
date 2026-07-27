@@ -1,0 +1,152 @@
+# Wazuh 4.9 manager — SIEM / HIDS for the VOC lab.
+#
+# OPT-IN. Not deployed by run-all.sh unless VOC_ENABLE_WAZUH=1.
+# Deploy on demand with:  voc-deploy wazuh
+#
+# Manager-only on purpose. The full Wazuh stack (manager + OpenSearch
+# indexer + dashboard) wants 5-6 GB of RAM, which does not fit next to
+# DefectDojo + TheHive + n8n on a laptop. The manager alone gives you:
+#   - the agent enrolment service (:1514/:1515) for monitored hosts
+#   - the rules/decoders engine and local alert log
+#   - the REST API (:55000), which is what n8n consumes
+# Alerts are pulled from the API into the existing pipeline (n8n ->
+# TheHive / DefectDojo) instead of being displayed in a Wazuh dashboard.
+# That keeps one pane of glass and saves ~4 GB.
+#
+# Access after deploy:
+#   kubectl -n voc-core port-forward svc/wazuh-manager 55000:55000
+#   curl -sku wazuh-wui:VocLabWazuh1! https://localhost:55000/security/user/authenticate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wazuh-manager-data
+  namespace: voc-core
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wazuh-api-creds
+  namespace: voc-core
+type: Opaque
+stringData:
+  # Lab credentials. Wazuh rejects weak API passwords, hence the shape.
+  API_USERNAME: wazuh-wui
+  API_PASSWORD: VocLabWazuh1!
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wazuh-manager
+  namespace: voc-core
+  labels:
+    app: wazuh-manager
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wazuh-manager
+  template:
+    metadata:
+      labels:
+        app: wazuh-manager
+    spec:
+      containers:
+        - name: wazuh-manager
+          image: wazuh/wazuh-manager:4.9.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 1514
+              name: agents-tcp
+              protocol: TCP
+            - containerPort: 1515
+              name: enrollment
+              protocol: TCP
+            - containerPort: 55000
+              name: api
+              protocol: TCP
+          env:
+            # No indexer deployed, so tell the manager not to try shipping
+            # alerts to one — otherwise filebeat retries forever and fills
+            # the log with connection errors.
+            - name: INDEXER_URL
+              value: ""
+            - name: FILEBEAT_SSL_VERIFICATION_MODE
+              value: "none"
+            - name: API_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-api-creds
+                  key: API_USERNAME
+            - name: API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-api-creds
+                  key: API_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/ossec/data
+          resources:
+            requests:
+              cpu: 200m
+              memory: 640Mi
+            limits:
+              cpu: 1000m
+              memory: 1536Mi
+          # Wazuh's first boot generates certs and initialises the rule set;
+          # a startupProbe gives it room to do that without the liveness
+          # probe killing the pod mid-initialisation.
+          startupProbe:
+            tcpSocket:
+              port: 55000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: 55000
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 1514
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            timeoutSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: wazuh-manager-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-manager
+  namespace: voc-core
+  labels:
+    app: wazuh-manager
+spec:
+  selector:
+    app: wazuh-manager
+  ports:
+    - name: agents-tcp
+      port: 1514
+      targetPort: 1514
+      protocol: TCP
+    - name: enrollment
+      port: 1515
+      targetPort: 1515
+      protocol: TCP
+    - name: api
+      port: 55000
+      targetPort: 55000
+      protocol: TCP
+  type: ClusterIP
