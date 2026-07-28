@@ -181,7 +181,9 @@ def normalize_ffuf(raw_path: Path, target_short: str) -> list[dict]:
         return []
 
     base = TARGET_BASES.get(target_short, f"http://{target_short}.targets.svc.cluster.local")
-    findings: list[dict] = []
+    discovered_endpoints: list[dict] = []
+    endpoint_urls: list[str] = []
+
     for r in results:
         try:
             status = int(r.get("status", 0))
@@ -195,52 +197,58 @@ def normalize_ffuf(raw_path: Path, target_short: str) -> list[dict]:
         path = f"/{word}"
         url = f"{base}{path}"
 
-        sensitive = word.lower() in SENSITIVE_PATH_HINTS
-        if status in (200, 201, 204) and sensitive:
-            severity = "High"
-        elif status in (200, 201, 204):
-            severity = "Medium"
-        elif status in (401, 403) and sensitive:
-            severity = "Medium"
-        else:
-            severity = "Info"  # 3xx redirects, 401/403 on non-sensitive paths
-
         length = r.get("length", "?")
         words = r.get("words", "?")
         lines = r.get("lines", "?")
         content_type = r.get("content-type", "n/a")
-        description = (
-            f"ffuf discovered endpoint {url}\n"
-            f" - HTTP status  : {status}\n"
-            f" - response len : {length}\n"
-            f" - words / lines: {words} / {lines}\n"
-            f" - content-type : {content_type}"
-        )
-        findings.append(
-            {
-                "title": f"Exposed endpoint discovered: {path} (HTTP {status})",
-                "severity": severity,
-                "description": description,
-                "date": _today(),
-                "cwe": 200,  # Information Exposure / exposed resource; weak CWE — replace if better fits
-                "impact": (
-                    "An attacker may leverage this discovered resource for further "
-                    "manual enumeration or to reach authenticated/hidden functionality."
-                ),
-                "mitigation": (
-                    "Remove the resource if unneeded, restrict access control on it, "
-                    "or ensure no sensitive data is exposed."
-                ),
-                "payload": path,
-                "param": "FUZZ",
-                "endpoints": [url],
-                "tags": tags_with_priority(severity, "ffuf", target_short),
-                "unique_id_from_tool": f"ffuf-{target_short}-{word}-{status}",
-                "active": True,
-                "verified": False,
-            }
-        )
-    return findings
+
+        discovered_endpoints.append({
+            "path": path,
+            "status": status,
+            "url": url,
+            "length": length,
+            "words": words,
+            "lines": lines,
+            "content_type": content_type,
+        })
+        endpoint_urls.append(url)
+
+    if not discovered_endpoints:
+        return []
+
+    endpoint_lines = [
+        f" - {ep['path']} (HTTP {ep['status']}, len: {ep['length']}, content-type: {ep['content_type']})"
+        for ep in discovered_endpoints
+    ]
+    description = (
+        f"ffuf discovered {len(discovered_endpoints)} endpoint(s) on target {target_short} ({base}):\n\n"
+        + "\n".join(endpoint_lines)
+    )
+
+    severity = "Info"
+    return [
+        {
+            "title": f"Endpoint Discovery Summary: {len(discovered_endpoints)} endpoints found on {target_short}",
+            "severity": severity,
+            "description": description,
+            "date": _today(),
+            "cwe": 200,
+            "impact": (
+                "Discovered endpoints provide structural information about the target application. "
+                "Review to ensure no unauthenticated or sensitive endpoints are publicly exposed."
+            ),
+            "mitigation": (
+                "Ensure proper access control and authentication on internal/admin endpoints."
+            ),
+            "payload": "FUZZ",
+            "param": "FUZZ",
+            "endpoints": endpoint_urls[:10],
+            "tags": tags_with_priority(severity, "ffuf", target_short, "endpoint-summary"),
+            "unique_id_from_tool": f"ffuf-summary-{target_short}",
+            "active": True,
+            "verified": False,
+        }
+    ]
 
 
 # --------------------------------------------------------------- xss ----

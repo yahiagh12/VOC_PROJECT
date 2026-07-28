@@ -142,7 +142,8 @@ def build_metrics() -> str:
             if t in scanners_set:
                 by_scanner[t] = by_scanner.get(t, 0) + 1
             if t in targets_set:
-                by_target[t] = by_target.get(t, 0) + 1
+                target_name = "dvwa" if t == "web-dvwa" else t
+                by_target[target_name] = by_target.get(target_name, 0) + 1
 
     # Priority bands and Damping/Amplification counters
     by_priority: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "unscored": 0}
@@ -238,11 +239,43 @@ def build_metrics() -> str:
     lines.append("# TYPE voc_findings_mttr_days gauge")
     lines.append(f"voc_findings_mttr_days {mttr:.1f}")
 
+    # Scan run metrics & SQLite counts
+    quick_runs = 0
+    full_runs = 0
+    db_path = "/workspace/scanners/voc-scans.db"
+    if os.path.exists(db_path):
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT quick_mode, COUNT(*) FROM scan_runs GROUP BY quick_mode;")
+            for mode, count in cur.fetchall():
+                if mode == 1:
+                    quick_runs = count
+                else:
+                    full_runs = count
+            conn.close()
+        except Exception:
+            pass
+
+    lines.append("# HELP voc_scan_runs_quick_total Total number of Quick Scans executed")
+    lines.append("# TYPE voc_scan_runs_quick_total counter")
+    lines.append(f"voc_scan_runs_quick_total {quick_runs}")
+
+    lines.append("# HELP voc_scan_runs_full_total Total number of Full Scans executed")
+    lines.append("# TYPE voc_scan_runs_full_total counter")
+    lines.append(f"voc_scan_runs_full_total {full_runs}")
+
     # Scan status metrics
     if scan_status:
         lines.append("# HELP voc_scan_last_duration_seconds Duration of last scan in seconds")
         lines.append("# TYPE voc_scan_last_duration_seconds gauge")
         lines.append(f"voc_scan_last_duration_seconds {scan_status.get('duration_seconds', 0)}")
+
+        is_quick = 1 if scan_status.get("quick_mode") else 2
+        lines.append("# HELP voc_scan_type_mode Type of last scan run (1=Quick Scan, 2=Full Scan)")
+        lines.append("# TYPE voc_scan_type_mode gauge")
+        lines.append(f"voc_scan_type_mode {is_quick}")
 
         ts = scan_status.get("timestamp", "")
         if ts:

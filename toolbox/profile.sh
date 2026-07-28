@@ -115,7 +115,11 @@ voc_sync_keys() {
   fi
 
   if [ "$synced" = "1" ]; then
-    echo "[VOC] All system API Keys (DefectDojo & TheHive) synchronized cleanly across namespaces."
+    # Restart pods consuming secret key env variables so they load the new token immediately
+    kubectl rollout restart deployment/n8n -n voc-core >/dev/null 2>&1 || true
+    kubectl rollout restart deployment/prioritization-service -n voc-core >/dev/null 2>&1 || true
+    kubectl rollout restart deployment/voc-metrics-exporter -n monitoring >/dev/null 2>&1 || true
+    echo "[VOC] All system API Keys (DefectDojo & TheHive) synchronized cleanly across namespaces and pod deployments."
   fi
 }
 
@@ -613,6 +617,7 @@ Prioritization Engine (CVSS + EPSS + KEV × Asset Context):
   voc-prio-explain <ID> Explain priority score calculation for finding ID
 
 Cluster & Troubleshooting Helpers:
+  voc-sync-keys         Synchronize DefectDojo & TheHive API keys across pods
   voc-prepull           Pre-pull scanner container images into cluster
   voc-forward <s/s> <p> Manually port-forward a service (e.g. voc-core/n8n 5678:5678)
   voc-logs <ns> [pod]   Stream container logs for a pod or deployment
@@ -633,9 +638,20 @@ EOF
 _voc_prio_curl() {
   kubectl exec -n voc-core deploy/prioritization-service -- \
     python3 -c "
-import sys, urllib.request
-req = urllib.request.Request('http://localhost:8000$1', method='$2')
-print(urllib.request.urlopen(req, timeout=120).read().decode())
+import sys, urllib.request, urllib.error
+data = b'' if '$2' == 'POST' else None
+req = urllib.request.Request('http://localhost:8000$1', data=data, method='$2')
+try:
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        print(resp.read().decode())
+except urllib.error.HTTPError as e:
+    res = e.read().decode()
+    if e.code == 409:
+        print('[VOC] A prioritization pass is already running in the background.')
+    else:
+        print(f'[VOC] Error {e.code}: {res}')
+except Exception as e:
+    print('[VOC] prioritization-service error:', e)
 " 2>/dev/null || echo "[VOC] prioritization-service not reachable (is it deployed?)"
 }
 

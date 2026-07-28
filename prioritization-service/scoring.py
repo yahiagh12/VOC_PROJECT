@@ -82,6 +82,7 @@ class ScoreInput:
     epss_percentile: float | None = None # rank among all CVEs 0..1
     kev: bool = False                    # listed in CISA KEV
     cve: str | None = None
+    title: str | None = None
     asset: Asset = field(default_factory=Asset)
 
 
@@ -232,6 +233,12 @@ def compute_score(
     multiplier = context_min_multiplier + (context_max_multiplier - context_min_multiplier) * ctx
 
     priority = int(round(max(0.0, min(100.0, base * multiplier))))
+
+    # Endpoint discovery findings are informational structural findings and should never be inflated to Critical/High.
+    title_lower = (inp.title or "").lower()
+    if "exposed endpoint" in title_lower or "endpoint discovery" in title_lower:
+        priority = min(priority, 30)
+        notes.append("endpoint-priority-capped")
 
     # KEV means someone is already exploiting this. Context can raise it but
     # must not bury it below the floor.

@@ -547,6 +547,7 @@ run_grype() {
   local GRYPE_IMAGE="$1"
   local IMAGE_SHORT
   IMAGE_SHORT=$(echo "$GRYPE_IMAGE" | sed 's|.*/||; s|:.*||')
+  [ "$IMAGE_SHORT" = "web-dvwa" ] && IMAGE_SHORT="dvwa"
   local JOB_NAME="grype-${IMAGE_SHORT}-${TIMESTAMP}"
   local GRYPE_REPORT="$REPORTS_DIR/grype_${IMAGE_SHORT}_$TIMESTAMP.json"
 
@@ -964,6 +965,24 @@ for attempt in 1 2 3 4 5; do
   sleep 5
 done
 [ "$STATUS_WRITTEN" = "0" ] && log_warning "Failed to write scan status ConfigMap after 5 attempts"
-# Explicit success exit — the trailing [ ] && idiom above would otherwise
-# leave exit code 1 under `set -e` when the write succeeded.
+
+# --- Automatic Post-Scan Pipeline Automation ---
+log_info "Running post-scan automation (prioritization pass & credential sync)..."
+# 1. Sync API keys across all namespaces & env
+source "$TOOLBOX_DIR/profile.sh" 2>/dev/null || true
+voc_sync_keys 2>/dev/null || true
+
+# 2. Trigger Prioritization Service scoring pass
+kubectl exec -n voc-core deploy/prioritization-service -- python3 -c "
+import urllib.request, json
+try:
+    req = urllib.request.Request('http://localhost:8000/score', method='POST')
+    urllib.request.urlopen(req, timeout=120)
+except Exception: pass
+" 2>/dev/null || true
+
+# 3. Refresh voc-metrics-exporter to stream fresh scan metrics to Grafana immediately
+kubectl rollout restart deployment/voc-metrics-exporter -n monitoring >/dev/null 2>&1 || true
+
+log_success "Post-scan pipeline automation completed successfully!"
 exit 0

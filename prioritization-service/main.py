@@ -67,6 +67,7 @@ def _score_finding(finding: dict, percentile: float | None, probability: float |
             epss_percentile=percentile,
             kev=kev.contains(cve),
             cve=cve,
+            title=finding.get("title"),
             asset=asset,
         ),
         **_score_kwargs(),
