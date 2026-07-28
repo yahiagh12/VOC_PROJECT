@@ -1,0 +1,236 @@
+{
+  "annotations": { "list": [] },
+  "description": "VOC Security & Vulnerability Posture — Scans, Findings, Severity Distribution, Scan Duration, and Prioritization Metrics.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 50 },
+              { "color": "orange", "value": 500 },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "targets": [{ "expr": "sum(voc_findings_total)", "legendFormat": "Total Findings", "refId": "A" }],
+      "title": "Total Open Findings",
+      "type": "stat"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 10 },
+              { "color": "red", "value": 50 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "targets": [{ "expr": "sum(voc_findings_critical_high)", "legendFormat": "Critical + High", "refId": "A" }],
+      "title": "Critical + High Severity",
+      "type": "stat"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "d",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 7 },
+              { "color": "orange", "value": 14 },
+              { "color": "red", "value": 30 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "targets": [{ "expr": "max(voc_findings_mttr_days)", "legendFormat": "MTTR", "refId": "A" }],
+      "title": "Mean Time to Remediate (MTTR)",
+      "type": "stat"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "s",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 300 },
+              { "color": "orange", "value": 600 },
+              { "color": "red", "value": 1200 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "targets": [{ "expr": "max(voc_scan_last_duration_seconds)", "legendFormat": "Duration", "refId": "A" }],
+      "title": "Last Scan Duration",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "stacking": { "mode": "normal" } }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "High" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Medium" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Low" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum(voc_findings_by_severity{severity=\"Critical\"}) by (severity)", "legendFormat": "Critical", "refId": "A" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"High\"}) by (severity)", "legendFormat": "High", "refId": "B" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Medium\"}) by (severity)", "legendFormat": "Medium", "refId": "C" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Low\"}) by (severity)", "legendFormat": "Low", "refId": "D" }
+      ],
+      "title": "Findings by Severity",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "High" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Medium" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Low" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 5 },
+      "id": 9,
+      "options": { "displayLabels": ["name", "percent"], "legend": { "displayMode": "list", "placement": "bottom" }, "pieType": "donut", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "sum(voc_findings_by_severity{severity=\"Critical\"}) by (severity)", "legendFormat": "Critical", "refId": "A" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"High\"}) by (severity)", "legendFormat": "High", "refId": "B" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Medium\"}) by (severity)", "legendFormat": "Medium", "refId": "C" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Low\"}) by (severity)", "legendFormat": "Low", "refId": "D" }
+      ],
+      "title": "Severity Distribution",
+      "type": "piechart"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "#73BF69", "value": null },
+              { "color": "#FADE2A", "value": 50 },
+              { "color": "#E02F44", "value": 200 }
+            ]
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Amplified Risk (Crown Jewels)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Damped Noise (Low Risk)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 5 },
+      "id": 11,
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "sum(voc_prioritization_amplified_total)", "legendFormat": "Amplified Risk (Crown Jewels)", "refId": "A" },
+        { "expr": "sum(voc_prioritization_damped_total)", "legendFormat": "Damped Noise (Low Risk)", "refId": "B" }
+      ],
+      "title": "Prioritization Impact",
+      "type": "bargauge"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "custom": { "drawStyle": "bars", "fillOpacity": 80, "stacking": { "mode": "normal" } } }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [{ "expr": "sum(voc_findings_by_scanner) by (scanner)", "legendFormat": "{{scanner}}", "refId": "A" }],
+      "title": "Findings by Scanner Source",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" } }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "id": 7,
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "sum(voc_findings_by_target) by (target)", "legendFormat": "{{target}}", "refId": "A" }],
+      "title": "Findings by Target Asset",
+      "type": "bargauge"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["voc", "security", "vulnerability"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+        "name": "DS_PROM",
+        "query": "prometheus",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "VOC Vulnerabilities & Scans",
+  "uid": "voc-vulnerabilities-scans",
+  "version": 1
+}

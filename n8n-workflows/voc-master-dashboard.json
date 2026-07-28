@@ -4,6 +4,23 @@
   "nodes": [
     {
       "parameters": {
+        "httpMethod": "POST",
+        "path": "voc/alert/grafana",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "wh-grafana-alert",
+      "name": "Webhook: Grafana Alert",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -600,
+        1200
+      ],
+      "webhookId": "voc-alert-grafana"
+    },
+    {
+      "parameters": {
         "rule": {
           "interval": [
             {
@@ -693,115 +710,6 @@
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "is-critical",
-              "leftValue": "={{ $json.priority }}",
-              "rightValue": 80,
-              "operator": {
-                "type": "number",
-                "operation": "gte"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "if-critical",
-      "name": "Priority \u2265 80 (Critical)?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        180,
-        1440
-      ]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "is-high",
-              "leftValue": "={{ $json.priority }}",
-              "rightValue": 60,
-              "operator": {
-                "type": "number",
-                "operation": "gte"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "if-high",
-      "name": "Priority \u2265 60 (High)?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        420,
-        1560
-      ]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "is-medium",
-              "leftValue": "={{ $json.priority }}",
-              "rightValue": 40,
-              "operator": {
-                "type": "number",
-                "operation": "gte"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "if-medium",
-      "name": "Priority \u2265 40 (Medium)?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        420,
-        1740
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "// CRITICAL PRIORITY \u2014 Log to execution history.\n// To wire real alerting, replace this with an HTTP Request node\n// pointing to your Slack/Discord webhook or PagerDuty.\nconst f = $input.first().json;\nconsole.log(`[VOC CRITICAL] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'critical', notified: true, channel: 'execution-log' } }];"
-      },
-      "id": "alert-critical",
-      "name": "Alert: Critical",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        420,
-        1380
-      ]
-    },
-    {
-      "parameters": {
         "method": "POST",
         "url": "http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/alert",
         "sendHeaders": true,
@@ -834,151 +742,6 @@
         1320
       ],
       "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/query?name=find-by-sourceref",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{$env.N8N_THEHIVE_API_KEY}}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ query: [{ _name: 'listAlert' }, { _name: 'filter', _and: [{ _field: 'sourceRef', _value: 'finding-' + $('Flatten & Enrich').item.json.id }] }] }) }}",
-        "options": {
-          "allowUnauthorizedCerts": true,
-          "timeout": 10000
-        }
-      },
-      "id": "thehive-search-alert",
-      "name": "Search Alert by SourceRef",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        900,
-        1440
-      ],
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "// Pure data transform \u2014 no HTTP.\n// Extract TheHive _id from search results, merge with original finding data.\nconst results = $input.first().json;\nconst alerts = Array.isArray(results) ? results : [];\nconst existing = alerts[0];\nif (!existing) {\n  return [{ json: { action: 'not_found' } }];\n}\nconst f = $('Flatten & Enrich').item.json;\nconst sevNum = f.severity === 'Critical' ? 4 : f.severity === 'High' ? 3 : f.severity === 'Medium' ? 2 : 1;\nreturn [{ json: {\n  alertId: existing._id,\n  title: '[VOC] ' + f.severity + ': ' + f.title,\n  description: 'Auto-created by VOC n8n workflow.\\nSeverity: ' + f.severity + '\\nPriority: ' + (f.priority || 'N/A') + '\\nCVE: ' + (f.cve || 'N/A') + '\\nDefectDojo Finding ID: ' + f.id,\n  severity: sevNum,\n  tags: (f.tags || []).concat(['voc', 'auto-created'])\n} }];"
-      },
-      "id": "thehive-extract-id",
-      "name": "Extract Alert ID",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1140,
-        1440
-      ]
-    },
-    {
-      "parameters": {
-        "method": "PATCH",
-        "url": "=http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/alert/{{ $json.alertId }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{$env.N8N_THEHIVE_API_KEY}}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ title: $json.title, description: $json.description, severity: $json.severity, tags: $json.tags }) }}",
-        "options": {
-          "allowUnauthorizedCerts": true,
-          "timeout": 10000
-        }
-      },
-      "id": "thehive-update-alert",
-      "name": "Update TheHive Alert",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1380,
-        1440
-      ],
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "method": "GET",
-        "url": "http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public",
-        "options": {
-          "timeout": 5000
-        }
-      },
-      "id": "health-thehive",
-      "name": "Ping TheHive",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        -60,
-        1200
-      ],
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "method": "GET",
-        "url": "http://kps-grafana.monitoring.svc.cluster.local/api/health",
-        "options": {
-          "timeout": 5000
-        }
-      },
-      "id": "health-grafana",
-      "name": "Ping Grafana",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        180,
-        1200
-      ],
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "// HIGH PRIORITY \u2014 Log to execution history.\nconst f = $input.first().json;\nconsole.log(`[VOC HIGH] Finding #${f.id}: ${f.title} (severity=${f.severity}, priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'high', notified: true, channel: 'execution-log' } }];"
-      },
-      "id": "alert-high",
-      "name": "Alert: High",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        660,
-        1500
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "// MEDIUM / LOW \u2014 Log only, no notification.\nconst f = $input.first().json;\nconsole.log(`[VOC INFO] Finding #${f.id}: ${f.title} (priority=${f.priority})`);\nreturn [{ json: { ...f, alertLevel: 'info', notified: false } }];"
-      },
-      "id": "log-low",
-      "name": "Log: Medium/Low",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        660,
-        1680
-      ]
     },
     {
       "parameters": {

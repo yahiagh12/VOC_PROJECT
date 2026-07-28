@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import threading
@@ -143,6 +144,41 @@ def build_metrics() -> str:
             if t in targets_set:
                 by_target[t] = by_target.get(t, 0) + 1
 
+    # Priority bands and Damping/Amplification counters
+    by_priority: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "unscored": 0}
+    damped_count = 0
+    amplified_count = 0
+
+    severity_base_map = {"Critical": 90, "High": 70, "Medium": 40, "Low": 20, "Info": 0}
+
+    for f in findings:
+        tags = set(test_tags.get(f.get("test"), [])) | set(f.get("tags") or [])
+        scored = False
+        orig_sev = f.get("severity", "Info")
+        base_score = severity_base_map.get(orig_sev, 0)
+
+        for t in tags:
+            m = re.match(r"^priority-(\d+)$", str(t))
+            if m:
+                scored = True
+                p_score = int(m.group(1))
+                if p_score >= 80:
+                    by_priority["critical"] += 1
+                elif p_score >= 60:
+                    by_priority["high"] += 1
+                elif p_score >= 40:
+                    by_priority["medium"] += 1
+                else:
+                    by_priority["low"] += 1
+
+                if p_score < base_score:
+                    damped_count += 1
+                elif p_score > base_score:
+                    amplified_count += 1
+
+        if not scored:
+            by_priority["unscored"] += 1
+
     # MTTR calculation (30-day window)
     now = datetime.utcnow()
     thirty_days_ago = now - timedelta(days=30)
@@ -166,6 +202,19 @@ def build_metrics() -> str:
     lines.append("# TYPE voc_findings_by_severity gauge")
     for sev, count in by_severity.items():
         lines.append(f'voc_findings_by_severity{{severity="{sev}"}} {count}')
+
+    lines.append("# HELP voc_findings_by_priority Number of open findings by calculated priority band")
+    lines.append("# TYPE voc_findings_by_priority gauge")
+    for band, count in by_priority.items():
+        lines.append(f'voc_findings_by_priority{{priority_band="{band}"}} {count}')
+
+    lines.append("# HELP voc_prioritization_damped_total Findings with dampened priority due to asset context")
+    lines.append("# TYPE voc_prioritization_damped_total gauge")
+    lines.append(f"voc_prioritization_damped_total {damped_count}")
+
+    lines.append("# HELP voc_prioritization_amplified_total Findings with amplified priority due to asset context")
+    lines.append("# TYPE voc_prioritization_amplified_total gauge")
+    lines.append(f"voc_prioritization_amplified_total {amplified_count}")
 
     lines.append("# HELP voc_findings_by_scanner Number of open findings by scanner")
     lines.append("# TYPE voc_findings_by_scanner gauge")

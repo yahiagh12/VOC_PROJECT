@@ -1,0 +1,99 @@
+{
+  "annotations": { "list": [] },
+  "description": "VOC Resource Usage — CPU Cores, RAM Memory Usage, Network Data Flow, and Disk Capacities.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 25, "lineInterpolation": "smooth" }
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [{ "expr": "sum(rate(container_cpu_usage_seconds_total{container!=\"\"}[2m])) by (pod)", "legendFormat": "{{pod}}", "refId": "A" }],
+      "title": "Pod CPU Usage (Real-Time Flow)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 25, "lineInterpolation": "smooth" },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [{ "expr": "sum(container_memory_working_set_bytes{container!=\"\"}) by (pod)", "legendFormat": "{{pod}}", "refId": "A" }],
+      "title": "Pod RAM Memory Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15 },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum(rate(container_network_receive_bytes_total[2m])) by (pod)", "legendFormat": "Rx {{pod}}", "refId": "A" },
+        { "expr": "sum(rate(container_network_transmit_bytes_total[2m])) by (pod)", "legendFormat": "Tx {{pod}}", "refId": "B" }
+      ],
+      "title": "Network Traffic Data Flow (Rx/Tx)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 75 },
+              { "color": "red", "value": 90 }
+            ]
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "id": 4,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "showThresholdMarkers": true },
+      "targets": [{ "expr": "max(100 - (node_filesystem_avail_bytes / node_filesystem_size_bytes * 100))", "legendFormat": "Disk Usage", "refId": "A" }],
+      "title": "Cluster Node Disk Usage Gauge",
+      "type": "gauge"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["voc", "resources", "metrics"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+        "name": "DS_PROM",
+        "query": "prometheus",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "VOC Resource Usage",
+  "uid": "voc-resource-usage",
+  "version": 2
+}

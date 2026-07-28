@@ -45,7 +45,7 @@
       },
       "targets": [
         {
-          "expr": "voc_findings_total",
+          "expr": "sum(voc_findings_total)",
           "legendFormat": "Total Findings",
           "refId": "A"
         }
@@ -80,7 +80,7 @@
       },
       "targets": [
         {
-          "expr": "voc_findings_critical_high",
+          "expr": "sum(voc_findings_critical_high)",
           "legendFormat": "Critical + High",
           "refId": "A"
         }
@@ -117,7 +117,7 @@
       },
       "targets": [
         {
-          "expr": "voc_findings_mttr_days",
+          "expr": "max(voc_findings_mttr_days)",
           "legendFormat": "MTTR",
           "refId": "A"
         }
@@ -154,7 +154,7 @@
       },
       "targets": [
         {
-          "expr": "voc_scan_last_duration_seconds",
+          "expr": "max(voc_scan_last_duration_seconds)",
           "legendFormat": "Duration",
           "refId": "A"
         }
@@ -195,11 +195,11 @@
         "tooltip": { "mode": "multi" }
       },
       "targets": [
-        { "expr": "voc_findings_by_severity{severity=\"Critical\"}", "legendFormat": "Critical", "refId": "A" },
-        { "expr": "voc_findings_by_severity{severity=\"High\"}", "legendFormat": "High", "refId": "B" },
-        { "expr": "voc_findings_by_severity{severity=\"Medium\"}", "legendFormat": "Medium", "refId": "C" },
-        { "expr": "voc_findings_by_severity{severity=\"Low\"}", "legendFormat": "Low", "refId": "D" },
-        { "expr": "voc_findings_by_severity{severity=\"Info\"}", "legendFormat": "Info", "refId": "E" }
+        { "expr": "sum(voc_findings_by_severity{severity=\"Critical\"}) by (severity)", "legendFormat": "Critical", "refId": "A" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"High\"}) by (severity)", "legendFormat": "High", "refId": "B" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Medium\"}) by (severity)", "legendFormat": "Medium", "refId": "C" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Low\"}) by (severity)", "legendFormat": "Low", "refId": "D" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Info\"}) by (severity)", "legendFormat": "Info", "refId": "E" }
       ],
       "title": "Findings by Severity (over time)",
       "type": "timeseries"
@@ -229,11 +229,11 @@
         "tooltip": { "mode": "single" }
       },
       "targets": [
-        { "expr": "voc_findings_by_severity{severity=\"Critical\"}", "legendFormat": "Critical", "refId": "A" },
-        { "expr": "voc_findings_by_severity{severity=\"High\"}", "legendFormat": "High", "refId": "B" },
-        { "expr": "voc_findings_by_severity{severity=\"Medium\"}", "legendFormat": "Medium", "refId": "C" },
-        { "expr": "voc_findings_by_severity{severity=\"Low\"}", "legendFormat": "Low", "refId": "D" },
-        { "expr": "voc_findings_by_severity{severity=\"Info\"}", "legendFormat": "Info", "refId": "E" }
+        { "expr": "sum(voc_findings_by_severity{severity=\"Critical\"}) by (severity)", "legendFormat": "Critical", "refId": "A" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"High\"}) by (severity)", "legendFormat": "High", "refId": "B" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Medium\"}) by (severity)", "legendFormat": "Medium", "refId": "C" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Low\"}) by (severity)", "legendFormat": "Low", "refId": "D" },
+        { "expr": "sum(voc_findings_by_severity{severity=\"Info\"}) by (severity)", "legendFormat": "Info", "refId": "E" }
       ],
       "title": "Severity Distribution",
       "type": "piechart"
@@ -263,7 +263,7 @@
         "tooltip": { "mode": "multi" }
       },
       "targets": [
-        { "expr": "voc_findings_by_scanner", "legendFormat": "{{scanner}}", "refId": "A" }
+        { "expr": "sum(voc_findings_by_scanner) by (scanner)", "legendFormat": "{{scanner}}", "refId": "A" }
       ],
       "title": "Findings by Scanner",
       "type": "timeseries"
@@ -294,10 +294,77 @@
         "text": {}
       },
       "targets": [
-        { "expr": "voc_findings_by_target", "legendFormat": "{{target}}", "refId": "A" }
+        { "expr": "sum(voc_findings_by_target) by (target)", "legendFormat": "{{target}}", "refId": "A" }
       ],
       "title": "Findings by Target",
       "type": "bargauge"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "#73BF69", "value": null },
+              { "color": "#FADE2A", "value": 50 },
+              { "color": "#E02F44", "value": 200 }
+            ]
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Amplified Risk (Crown Jewels)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Damped Noise (Low Risk)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
+      "id": 11,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "targets": [
+        { "expr": "sum(voc_prioritization_amplified_total)", "legendFormat": "Amplified Risk (Crown Jewels)", "refId": "A" },
+        { "expr": "sum(voc_prioritization_damped_total)", "legendFormat": "Damped Noise (Low Risk)", "refId": "B" }
+      ],
+      "title": "Prioritization Impact: Amplified vs Damped",
+      "type": "bargauge"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Findings",
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Priority Critical (>=80)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Priority High (60-79)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Priority Medium (40-59)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Priority Low (<40)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
+      "id": 12,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }
+      },
+      "targets": [
+        { "expr": "sum(voc_findings_by_priority{priority_band=\"critical\"})", "legendFormat": "Priority Critical (>=80)", "refId": "A" },
+        { "expr": "sum(voc_findings_by_priority{priority_band=\"high\"})", "legendFormat": "Priority High (60-79)", "refId": "B" },
+        { "expr": "sum(voc_findings_by_priority{priority_band=\"medium\"})", "legendFormat": "Priority Medium (40-59)", "refId": "C" },
+        { "expr": "sum(voc_findings_by_priority{priority_band=\"low\"})", "legendFormat": "Priority Low (<40)", "refId": "D" }
+      ],
+      "title": "Post-Prioritization Risk Bands",
+      "type": "timeseries"
     },
 
     {
@@ -325,8 +392,8 @@
         "tooltip": { "mode": "multi" }
       },
       "targets": [
-        { "expr": "voc_findings_total", "legendFormat": "Total", "refId": "A" },
-        { "expr": "voc_findings_critical_high", "legendFormat": "Critical+High", "refId": "B" }
+        { "expr": "sum(voc_findings_total)", "legendFormat": "Total", "refId": "A" },
+        { "expr": "sum(voc_findings_critical_high)", "legendFormat": "Critical+High", "refId": "B" }
       ],
       "title": "Findings Trend",
       "type": "timeseries"
@@ -496,24 +563,138 @@
       "datasource": "${DS_PROM}",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" }
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Cores",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "lineInterpolation": "smooth"
+          }
         },
         "overrides": []
       },
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 22 },
-      "id": 13,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 14,
       "options": {
-        "displayLabels": ["name", "percent"],
-        "legend": { "displayMode": "list", "placement": "right" },
-        "pieType": "donut",
-        "reduceOptions": { "calcs": ["lastNotNull"] },
-        "tooltip": { "mode": "single" }
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi" }
       },
       "targets": [
-        { "expr": "voc_findings_by_scanner", "legendFormat": "{{scanner}}", "refId": "A" }
+        {
+          "expr": "sum(node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate) by (pod)",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
       ],
-      "title": "Scanner Distribution",
-      "type": "piechart"
+      "title": "Pod CPU Usage (Real-Time Flow)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Bytes",
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineWidth": 2,
+            "lineInterpolation": "smooth"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 15,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "sum(container_memory_working_set_bytes{container!=\"\"}) by (pod)",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Pod RAM Memory Usage",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "Bps",
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 2
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "id": 16,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(container_network_receive_bytes_total[2m])) by (pod)",
+          "legendFormat": "Rx {{pod}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(container_network_transmit_bytes_total[2m])) by (pod)",
+          "legendFormat": "Tx {{pod}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Pod Network Traffic Flow (Rx/Tx)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "${DS_PROM}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 75 },
+              { "color": "red", "value": 90 }
+            ]
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "id": 17,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "100 - (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"} * 100)",
+          "legendFormat": "Disk Usage",
+          "refId": "A"
+        }
+      ],
+      "title": "Cluster Node Disk Usage Gauge",
+      "type": "gauge"
     }
   ],
   "schemaVersion": 39,

@@ -70,6 +70,55 @@ _voc_helm_deployed() {
 }
 
 # _voc_deploy_ready <ns> <deployment> : 0 if it has at least one ready replica.
+# Automatically syncs active DefectDojo & TheHive system API keys across all namespace secrets (.env, defectdojo-creds, thehive-creds, prioritization-secrets)
+voc_sync_keys() {
+  local dd_token th_token
+  # 1. Fetch live DefectDojo admin API key
+  dd_token=$(kubectl exec -n voc-core deploy/defectdojo-django -- python manage.py shell -c "from django.contrib.auth import get_user_model; from rest_framework.authtoken.models import Token; User = get_user_model(); u = User.objects.filter(username='admin').first(); t, _ = Token.objects.get_or_create(user=u); print(t.key)" 2>/dev/null | tail -n 1)
+  
+  # 2. Fetch live TheHive API key
+  th_token=$(kubectl get secret -n voc-core thehive-creds -o jsonpath='{.data.api-key}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+
+  local synced=0
+
+  # Sync DefectDojo API Key
+  if [ -n "$dd_token" ] && [ "${#dd_token}" -ge 20 ]; then
+    export DD_API_KEY="$dd_token"
+    if [ -f "$REPO_DIR/.env" ]; then
+      sed -i "s/^DD_API_KEY=.*/DD_API_KEY=$dd_token/" "$REPO_DIR/.env" 2>/dev/null || true
+    fi
+    for ns in voc-core scanning monitoring; do
+      if kubectl get ns "$ns" >/dev/null 2>&1; then
+        kubectl -n "$ns" create secret generic defectdojo-creds \
+          --from-literal=url=http://defectdojo-django.voc-core.svc.cluster.local \
+          --from-literal=api-key="$dd_token" \
+          --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1 || true
+      fi
+    done
+    kubectl -n voc-core create secret generic prioritization-secrets \
+      --from-literal=DEFECTDOJO_API_KEY="$dd_token" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1 || true
+    synced=1
+  fi
+
+  # Sync TheHive API Key
+  if [ -n "$th_token" ]; then
+    export THEHIVE_KEY="$th_token"
+    export N8N_THEHIVE_API_KEY="$th_token"
+    if [ -f "$REPO_DIR/.env" ]; then
+      sed -i "s/^THEHIVE_KEY=.*/THEHIVE_KEY=$th_token/" "$REPO_DIR/.env" 2>/dev/null || true
+    fi
+    kubectl -n voc-core create secret generic thehive-creds \
+      --from-literal=api-key="$th_token" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1 || true
+    synced=1
+  fi
+
+  if [ "$synced" = "1" ]; then
+    echo "[VOC] All system API Keys (DefectDojo & TheHive) synchronized cleanly across namespaces."
+  fi
+}
+
 _voc_deploy_ready() {
   local ready
   ready=$(kubectl get deploy "$2" -n "$1" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
@@ -94,12 +143,26 @@ for p in os.listdir('/proc'):
 
   sleep 1 # Wait for the port to be released by the kernel
 
+  echo "[VOC] Waiting for service '$svc' in namespace '$ns' to be ready..."
+  local attempts=0
+  until kubectl get endpoints "$svc" -n "$ns" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null | grep -q '.' || [ $attempts -ge 60 ]; do
+    sleep 2
+    attempts=$((attempts + 1))
+  done
+
   # Start the new port-forward in the background, wrapped in a
   # self-healing supervisor loop: if kubectl port-forward drops
   # (target pod restart, API blip, long-running scan saturating the
   # tunnel), it is restarted within ~2s instead of silently breaking
   # every localhost URL that depends on it.
   nohup bash -c "while true; do kubectl port-forward --address 0.0.0.0 -n '$ns' 'svc/$svc' '$ports' >/dev/null 2>&1; sleep 2; done" >/dev/null 2>&1 &
+
+  # Wait until local HTTP port actually responds
+  local http_attempts=0
+  until curl -s -o /dev/null -w "%{http_code}" "http://localhost:${local_port}/" 2>/dev/null | grep -E -q "^(200|302|401|403)$" || [ $http_attempts -ge 30 ]; do
+    sleep 2
+    http_attempts=$((http_attempts + 1))
+  done
 }
 
 voc_up() {
@@ -356,9 +419,11 @@ voc_deploy() {
       voc_helm_repo_ready prometheus-community https://prometheus-community.github.io/helm-charts
       kubectl apply -f "$REPO_DIR/k8s/monitoring/" 2>/dev/null || true
 
-      echo "[VOC] Creating Grafana dashboard ConfigMap..."
+      echo "[VOC] Creating Grafana dashboard ConfigMaps..."
       kubectl -n monitoring create configmap voc-grafana-dashboards \
-        --from-file=voc-master.json="$REPO_DIR/k8s/monitoring/grafana-dashboard.json" \
+        --from-file=voc-vulnerabilities.json="$REPO_DIR/k8s/monitoring/dashboard-voc-vulnerabilities.json" \
+        --from-file=voc-health.json="$REPO_DIR/k8s/monitoring/dashboard-voc-health.json" \
+        --from-file=voc-resources.json="$REPO_DIR/k8s/monitoring/dashboard-voc-resources.json" \
         --dry-run=client -o yaml | kubectl apply -f -
 
       helm upgrade --install kps prometheus-community/kube-prometheus-stack -n monitoring \
@@ -429,6 +494,7 @@ _voc_load_env() {
     # shellcheck disable=SC1090
     set -a; . "$env_file"; set +a
   fi
+  voc_sync_keys >/dev/null 2>&1 || true
 }
 
 voc_scan() {
@@ -521,59 +587,49 @@ voc_logs() {
 }
 
 voc_help() {
-  cat <<'EOF'
-VOC Toolbox Commands:
-  voc-up                  Create k3d cluster + namespaces
-  voc-down                Delete k3d cluster
-  voc-status              Show cluster status (nodes, pods, services)
-  voc-deploy <component>  Deploy: ns, dd, n8n, thehive, wazuh, targets,
-                          scanners, prio, monitoring, no-monitoring, all
-  voc-scan                Run full scan pipeline (~10-12 min)
-  voc-scan --quick        Quick scan: skip nuclei + xss (~6 min)
-  voc-prio                Trigger a prioritization pass now
-  voc-prio-explain <id>   Show why a DefectDojo finding got its score
-  voc-assets              Show the asset inventory driving prioritization
-  voc-test-tool <tool> <target>  Run a single scanner (ffuf, sqlmap, etc.)
-  voc-history             Show scan history from SQLite database
-  voc-history --run <N>   Show details for a specific scan run
-  voc-prepull             Pre-pull scanner images into k3d (once per cluster)
-  voc-forward <ns/svc> <local:remote>  Port-forward a service
-  voc-logs <ns> [pod]     Get pod logs
-  voc-refresh             Force a full redeploy on the next start
-  voc-help                This message
+  cat << 'EOF'
+==============================================================================
+                VOC — Vulnerability Operations Center CLI                      
+==============================================================================
 
-Workflow:
-  1. voc-up                    # create the k3d cluster
-  2. voc-deploy all            # deploy the full stack
-  3. voc-forward voc-core/defectdojo-django 8080:8080  # access UI
-  4. voc-scan                  # run scans and import to DefectDojo
-  5. voc-scan --quick          # quick iteration mode
+Core Management:
+  voc-up                Start local k3d Kubernetes cluster
+  voc-down              Tear down k3d Kubernetes cluster
+  voc-status            Display cluster status, pods, and services
+  voc-deploy <comp>     Deploy component: all | n8n | defectdojo | thehive |
+                        prio | monitoring | wazuh | no-monitoring
+  voc-refresh           Clear cached state to force a clean redeploy
 
-Optional components (off by default to save RAM):
-  voc-deploy wazuh             # Wazuh manager (SIEM), ~1.5 GB
-  voc-deploy monitoring        # Grafana + Prometheus, ~2 GB
-  voc-deploy no-monitoring     # tear Grafana + Prometheus back down
-  Or set VOC_ENABLE_WAZUH=1 / VOC_ENABLE_MONITORING=1 before ./start.sh
+Scanning & Security Automation:
+  voc-scan              Trigger full vulnerability scan across all targets
+  voc-scan --quick      Trigger quick scan (bypasses long DAST brute-forcing)
+  voc-test-tool <t> <u> Run single scanner tool (e.g. ffuf, sqlmap, nuclei)
+  voc-history           View historical scan runs and finding counts
+  voc-history --run <N> View detailed breakdown for a specific scan run
 
-Prioritization (context-aware: CVSS + EPSS + KEV x asset criticality):
-  Business context lives in prioritization-service/asset-inventory.yaml.
-  Edit it, then:  voc-deploy prio     # re-applies the ConfigMap + reloads
+Prioritization Engine (CVSS + EPSS + KEV × Asset Context):
+  voc-prio              Run prioritization scoring pass over DefectDojo
+  voc-assets            List configured business assets & criticality factors
+  voc-prio-explain <ID> Explain priority score calculation for finding ID
 
-Service URLs (after voc-deploy all):
-  DefectDojo:  http://localhost:8080
-  n8n:         http://localhost:5678
-  Juice Shop:  http://localhost:3000
-  TheHive:     http://localhost:9000
+Cluster & Troubleshooting Helpers:
+  voc-prepull           Pre-pull scanner container images into cluster
+  voc-forward <s/s> <p> Manually port-forward a service (e.g. voc-core/n8n 5678:5678)
+  voc-logs <ns> [pod]   Stream container logs for a pod or deployment
+  voc-help              Display this menu
 
-From Windows host (outside toolbox):
-  $env:KUBECONFIG = "<repo-root>\.kube\config"
-  kubectl get nodes
+Live Portals (accessible after deployment):
+  DefectDojo:          http://localhost:8080  (admin / vaimallK7w0ldXPgYV5oRM)
+  n8n Orchestration:   http://localhost:5678  (zrty admin@voc.local / voclab2026)
+  TheHive Incident Mgmt: http://localhost:9000 (vocadmin@thehive.local / vocadmin123)
+  Grafana Observability: http://localhost:3001 (admin / voclab2026)
+  Juice Shop Target:    http://localhost:3000
+
+==============================================================================
 EOF
 }
 
 # --- Prioritization helpers -------------------------------------------
-# The service is ClusterIP-only, so these run curl inside the pod rather
-# than requiring yet another port-forward.
 _voc_prio_curl() {
   kubectl exec -n voc-core deploy/prioritization-service -- \
     python3 -c "
@@ -590,14 +646,12 @@ voc_prio_explain() {
 }
 voc_assets()       { _voc_prio_curl "/assets" GET; }
 
-# Drop the deployment state cache so the next start redeploys everything
-# from scratch (helm upgrades, image builds, image imports).
 voc_refresh() {
   rm -rf "$VOC_STATE_DIR"
   echo "[VOC] Deployment state cleared — next start will do a full redeploy."
 }
 
-# Aliases — hyphenated names (as shown in banner)
+# Standard CLI Aliases
 alias voc-up="voc_up"
 alias voc-down="voc_down"
 alias voc-status="voc_status"
@@ -610,15 +664,15 @@ alias voc-help="voc_help"
 alias voc-run-all="voc_run_all"
 alias voc-test-tool="voc_test_tool"
 alias voc-history="voc_history"
+alias voc-sync-keys="voc_sync_keys"
 alias voc-prio="voc_prio"
 alias voc-prio-explain="voc_prio_explain"
 alias voc-assets="voc_assets"
 alias voc-refresh="voc_refresh"
 
-# Short aliases
+# Short Shorthand Aliases
 alias vu="voc_up"
 alias vd="voc_down"
 alias vs="voc_status"
 alias vscan="voc_scan"
 alias vh="voc_history"
-alias voc-test-tool="bash \$REPO_DIR/scripts/test-tool.sh"

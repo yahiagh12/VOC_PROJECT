@@ -35,6 +35,7 @@ alertmanager:
 grafana:
   enabled: true
   adminPassword: "voclab2026"
+  defaultDashboardsEnabled: false
   # Dashboards come from a ConfigMap, so a restart loses nothing worth
   # keeping and we save a PVC.
   persistence:
@@ -74,10 +75,9 @@ prometheus:
             requests:
               storage: 10Gi
 
-# Host-level metrics are not what this project is about, and the exporter
-# runs as a privileged DaemonSet on every node.
+# Host-level metrics exporter
 prometheus-node-exporter:
-  enabled: false
+  enabled: true
 
 # Cluster object metrics — keep, they are cheap and the VOC dashboard uses
 # some of them for pod health panels.
