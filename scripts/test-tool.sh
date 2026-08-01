@@ -5,7 +5,8 @@ if [ "$#" -lt 2 ]; then
   echo "Usage: voc-test-tool <tool> <target>"
   echo "Example: voc-test-tool sqlmap dvwa"
   echo "         voc-test-tool ffuf juice-shop"
-  echo "Supported tools: sqlmap, ffuf, xss, nuclei"
+  echo "         voc-test-tool katana juice-shop   # crawl only, no findings"
+  echo "Supported tools: katana, sqlmap, ffuf, xss, nuclei"
   exit 1
 fi
 
@@ -33,6 +34,57 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC
 log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# --- Katana: discovery only -------------------------------------------
+# Katana is a crawler, not a scanner. It produces the URL inventory the
+# other tools consume and never writes a finding to DefectDojo, so it has
+# nothing to normalize or import. It also runs BEFORE any inventory
+# exists, which is why it short-circuits the all_urls/param_urls lookup
+# below instead of failing on it.
+if [ "$TOOL" = "katana" ] || [ "$TOOL" = "discovery" ]; then
+  case "$TARGET_SHORT" in
+    dvwa)       TARGET_URL="http://dvwa.targets.svc.cluster.local:80" ;;
+    juice-shop) TARGET_URL="http://juice-shop.targets.svc.cluster.local:3000" ;;
+    *)          TARGET_URL="http://${TARGET_SHORT}.targets.svc.cluster.local" ;;
+  esac
+
+  JOB_NAME="discovery-${TARGET_SHORT}-test"
+  OUT="$REPORTS_DIR/discovery_${TARGET_SHORT}_test.txt"
+
+  log_info "Crawling $TARGET_URL with katana (job: $JOB_NAME)..."
+  kubectl delete job "$JOB_NAME" -n scanning --ignore-not-found >/dev/null 2>&1
+  content="$(cat "$SCANNERS_DIR/discovery-job.yaml")"
+  content="${content//__JOB_NAME__/$JOB_NAME}"
+  content="${content//__TARGET_URL__/$TARGET_URL}"
+  printf '%s' "$content" | kubectl apply -f - >/dev/null 2>&1
+
+  kubectl wait --for=condition=complete "job/$JOB_NAME" -n scanning --timeout=300s >/dev/null 2>&1 || true
+
+  pod=$(kubectl get pods -n scanning -l "job-name=$JOB_NAME" --no-headers -o name 2>/dev/null | head -1)
+  if [ -n "$pod" ]; then
+    kubectl logs -n scanning "${pod#pod/}" 2>/dev/null \
+      | sed -n '/===DISCOVERY_RESULTS_START===/,/===DISCOVERY_RESULTS_END===/{ /===DISCOVERY_RESULTS/d; p; }' \
+      > "$OUT"
+  fi
+  kubectl delete job "$JOB_NAME" -n scanning --ignore-not-found >/dev/null 2>&1
+
+  crawled=$(grep -c . "$OUT" 2>/dev/null || echo 0)
+  log_success "katana crawled $crawled URL(s) -> $OUT"
+  echo ""
+  cat "$OUT" 2>/dev/null || true
+  echo ""
+
+  # A static crawler cannot reach SPA routes, REST endpoints or anything
+  # behind a login, so the crawl on its own is rarely the real inventory.
+  # Say so here rather than letting the number be read as full coverage.
+  SEED_URLS="$SCANNERS_DIR/seed-urls.${TARGET_SHORT}.txt"
+  if [ -f "$SEED_URLS" ]; then
+    seeds=$(grep -cvE '^[[:space:]]*(#|$)' "$SEED_URLS" 2>/dev/null || echo 0)
+    log_info "The hand-written seed list adds $seeds URL(s): $(basename "$SEED_URLS")"
+    log_info "A full 'voc-scan' merges both into all_urls_${TARGET_SHORT}_<timestamp>.txt"
+  fi
+  exit 0
+fi
 
 # --- Find latest URL lists from previous scan ---
 ALL_URLS=$(ls -1t "$REPORTS_DIR"/all_urls_${TARGET_SHORT}_*.txt 2>/dev/null | head -n1 || true)

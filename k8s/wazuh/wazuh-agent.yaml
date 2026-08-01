@@ -1,0 +1,136 @@
+# Wazuh agent — one per cluster node (k3d has a single node, so one pod).
+#
+# Without an agent the manager only watches itself and the SIEM half of the
+# project has nothing to detect. This agent gives Wazuh something real to
+# look at:
+#   - realtime file integrity monitoring on the node's /etc, /usr/bin,
+#     /usr/sbin (mounted read-only at /host)
+#   - rootcheck and SCA (CIS benchmark) scans of the node
+#   - log collection from /var/log/voc-audit.log
+#
+# The agent is deliberately NOT configured here. It enrols into the `default`
+# group and the manager pushes the shared agent.conf from the
+# wazuh-manager-conf ConfigMap to it, which is how Wazuh is meant to be
+# operated: one place to change policy, every agent follows. See the
+# `agent.conf` key in k8s/wazuh/wazuh-manager.yaml.
+#
+# Namespace: voc-siem, not voc-core. hostPath volumes are forbidden by the
+# `baseline` pod-security level that voc-core enforces, and relaxing voc-core
+# would hand the same exemption to DefectDojo, n8n and TheHive. See the
+# voc-siem namespace in k8s/namespaces/namespaces.yaml.
+#
+# Enrolment uses the shared password from the wazuh-api-creds secret, so a
+# random pod cannot register itself as an agent and inject events. Secrets do
+# not cross namespaces, so `voc-deploy wazuh` mirrors that one key into the
+# voc-siem secret `wazuh-enrollment` — the value in k8s/wazuh/wazuh-manager.yaml
+# stays the single source of truth. Applying this file with plain `kubectl
+# apply` and nothing else will leave the agent without a password.
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: wazuh-agent
+  namespace: voc-siem
+  labels:
+    app: wazuh-agent
+spec:
+  selector:
+    matchLabels:
+      app: wazuh-agent
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: wazuh-agent
+    spec:
+      # The agent is only useful if it starts after the manager can accept
+      # enrolments; the entrypoint retries, this just avoids a noisy first
+      # minute on a cold cluster.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: wazuh-agent
+          image: wazuh/wazuh-agent:4.14.6
+          imagePullPolicy: IfNotPresent
+          env:
+            # WAZUH_MANAGER_SERVER, not WAZUH_MANAGER: the image's init script
+            # substitutes exactly these names into ossec.conf, and a wrong one
+            # leaves <address> empty, which fails as
+            # "wazuh-agentd: ERROR: (4112): Invalid server address found: ''".
+            - name: WAZUH_MANAGER_SERVER
+              value: wazuh-manager.voc-core.svc.cluster.local
+            - name: WAZUH_MANAGER_PORT
+              value: "1514"
+            - name: WAZUH_REGISTRATION_SERVER
+              value: wazuh-manager.voc-core.svc.cluster.local
+            - name: WAZUH_REGISTRATION_PORT
+              value: "1515"
+            - name: WAZUH_REGISTRATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-enrollment
+                  key: authd.pass
+            - name: WAZUH_AGENT_GROUP
+              value: default
+            # Name the agent after the node it watches, so `voc-wazuh agents`
+            # reads like an inventory instead of a list of pod hashes.
+            - name: WAZUH_AGENT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          lifecycle:
+            postStart:
+              exec:
+                # logcollector warns once per second about a missing file, so
+                # create it before the agent gets there.
+                command: ["/bin/sh", "-c", "touch /var/log/voc-audit.log && mkdir -p /var/ossec/fim-test"]
+          volumeMounts:
+            # Read-only view of the node's configuration and binaries. This is
+            # what FIM actually watches — see <directories> in agent.conf.
+            # The k3d node runs the rancher/k3s image, which has /bin and
+            # /sbin but no /usr/bin or /usr/sbin; `type: Directory` below
+            # makes a layout change fail loudly instead of monitoring nothing.
+            - name: host-etc
+              mountPath: /host/etc
+              readOnly: true
+            - name: host-bin
+              mountPath: /host/bin
+              readOnly: true
+            - name: host-sbin
+              mountPath: /host/sbin
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          # The agent is healthy when its own control script says every
+          # daemon is running. A TCP probe would not catch a half-dead agent
+          # that stopped shipping events.
+          startupProbe:
+            exec:
+              command: ["/bin/sh", "-c", "/var/ossec/bin/wazuh-control status | grep -q 'wazuh-agentd is running'"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "/var/ossec/bin/wazuh-control status | grep -q 'wazuh-agentd is running'"]
+            initialDelaySeconds: 120
+            periodSeconds: 60
+            timeoutSeconds: 10
+      volumes:
+        - name: host-etc
+          hostPath:
+            path: /etc
+            type: Directory
+        - name: host-bin
+          hostPath:
+            path: /bin
+            type: Directory
+        - name: host-sbin
+          hostPath:
+            path: /sbin
+            type: Directory

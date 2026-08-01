@@ -209,6 +209,15 @@ TH_PID=$!
 if [ "$VOC_ENABLE_WAZUH" = "1" ]; then
   wait_ready deployment wazuh-manager voc-core 600 "Wazuh manager" &
   WZ_PID=$!
+  # The agent enrols against the manager, so it is always the slower of the
+  # two on a cold start. It is not fatal if it lags — alerts from the manager
+  # itself still flow — hence the shorter budget and the soft warning.
+  (
+    kubectl rollout status daemonset/wazuh-agent -n voc-siem --timeout=420s >/dev/null 2>&1 \
+      && log_success "Wazuh agent is enrolled" \
+      || log_warning "Wazuh agent not ready yet — check 'voc-wazuh agents'"
+  ) &
+  WZA_PID=$!
 fi
 (
   kubectl wait --for=condition=Ready pod -n targets --all --timeout=180s >/dev/null 2>&1 \
@@ -223,6 +232,7 @@ wait "$N8N_PID" || true
 wait "$TH_PID" || true
 wait "$TG_PID" || true
 if [ -n "${WZ_PID:-}" ]; then wait "$WZ_PID" || true; fi
+if [ -n "${WZA_PID:-}" ]; then wait "$WZA_PID" || true; fi
 
 if [ "$DD_READY" -eq 0 ]; then
   log_error "DefectDojo not ready. Current pod status:"
@@ -249,7 +259,10 @@ else
   _voc_start_pf voc-core n8n 5678:5678
   _voc_start_pf targets juice-shop 3000:3000
   _voc_start_pf voc-core thehive-svc 9000:9000
-  if [ "$VOC_ENABLE_WAZUH" = "1" ]; then _voc_start_pf voc-core wazuh-manager 55000:55000; fi
+  # https: the Wazuh API does not answer plaintext, and the readiness probe
+  # inside _voc_start_pf would otherwise retry for a minute against a tunnel
+  # that is already working.
+  if [ "$VOC_ENABLE_WAZUH" = "1" ]; then _voc_start_pf voc-core wazuh-manager 55000:55000 https; fi
   if [ "$VOC_ENABLE_MONITORING" = "1" ] && kubectl get svc -n monitoring kps-grafana >/dev/null 2>&1; then
     _voc_start_pf monitoring kps-grafana 3001:80
     log_info "Grafana port-forward started on :3001"
@@ -489,6 +502,8 @@ echo -e "${GREEN}║  Juice Shop:  http://localhost:3000                      �
 echo -e "${GREEN}║  TheHive:     http://localhost:9000                      ║${NC}"
 if [ "$VOC_ENABLE_WAZUH" = "1" ]; then
 echo -e "${GREEN}║  Wazuh API:   https://localhost:55000                    ║${NC}"
+echo -e "${GREEN}║    SIEM alerts (level 7+) flow to TheHive via n8n         ║${NC}"
+echo -e "${GREEN}║    Run 'voc-wazuh test' to prove the chain end to end     ║${NC}"
 fi
 if [ "$VOC_ENABLE_MONITORING" = "1" ]; then
 echo -e "${GREEN}║  Grafana:     http://localhost:3001                      ║${NC}"

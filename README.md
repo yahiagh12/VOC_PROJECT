@@ -46,7 +46,7 @@ no-ops — typically under a minute instead of 10+.
 |---|---|
 | `VOC_SCAN_ON_START=1` | always run scans on start (`0` = never) |
 | `VOC_FORCE_DEPLOY=1` | ignore the state cache, redeploy everything |
-| `VOC_ENABLE_WAZUH=1` | deploy the Wazuh manager (SIEM, ~1.5 GB) |
+| `VOC_ENABLE_WAZUH=1` | deploy the Wazuh SIEM — manager + node agent (~2 GB) |
 | `VOC_ENABLE_MONITORING=1` | deploy Grafana + Prometheus (~2 GB) |
 
 Inside the toolbox, `voc-refresh` clears the state cache and `voc-help` lists everything.
@@ -103,14 +103,23 @@ If your port-forwards ever drop (or if you restart your computer tomorrow), just
   ConfigMap |        v                 +---------------------+
             |   +-------------------+  | TheHive (cases) +   |
             |   |   DefectDojo      |  | Slack/Discord notify|
-            |   |   (updated)       |  +---------------------+
-            |   +-------------------+
-            |
-     business context: internet exposure, criticality 1-5, data class
+            |   |   (updated)       |  +----------^----------+
+            |   +-------------------+             |
+            |                                     | level 7+ alerts
+     business context: internet exposure,         | (webhook, not polled)
+     criticality 1-5, data class          +-------+-------------+
+                                          |   Wazuh manager     | <-- SIEM
+                                          | rules + integrator  |     (opt-in)
+                                          +-------^-------------+
+                                                  | agent channel :1514
+                                          +-------+-------------+
+                                          | Wazuh agent (node)  |
+                                          | FIM, rootcheck, SCA |
+                                          +---------------------+
 
   Targets: Juice Shop + DVWA (lab scan targets)
   Cluster: k3d (k3s-in-Docker) inside the VOC dev toolbox
-  Optional: Wazuh manager (SIEM), Grafana + Prometheus — both off by default
+  Optional: Wazuh SIEM, Grafana + Prometheus — both off by default
 ```
 
 ---
@@ -163,6 +172,57 @@ both to `1.0` disables context and reverts to pure CVSS+EPSS scoring.
 
 ---
 
+## SIEM (opt-in)
+
+Scanners tell you what *could* be exploited. Wazuh tells you what someone is
+*doing*. Both end up in the same TheHive queue.
+
+```bash
+VOC_ENABLE_WAZUH=1 ./start.sh     # or, in the toolbox: voc-deploy wazuh
+```
+
+That brings up two things:
+
+| Piece | Namespace | Job |
+|---|---|---|
+| **Wazuh manager** | `voc-core` | Rules/decoders engine, agent enrolment (:1515), REST API (:55000) |
+| **Wazuh agent** (DaemonSet) | `voc-siem` | Watches the cluster node: realtime FIM on `/etc`, `/bin`, `/sbin`, rootcheck, CIS benchmark (SCA) |
+
+**How alerts get out.** There is no Wazuh indexer or dashboard here —
+OpenSearch alone wants 5-6 GB, and the manager's REST API does not serve
+alerts at all (in a full deployment you query the indexer for them). Instead
+the manager's `integrator` daemon POSTs every alert at level 7 or above to an
+n8n webhook, which normalizes it and creates a TheHive alert:
+
+```
+agent event -> manager rules -> integrator -> n8n -> TheHive alert
+```
+
+Wazuh's level 0-15 maps onto TheHive's severity 1-4 (7-9 medium, 10-11 high,
+12+ critical), MITRE technique IDs become tags, and source IPs, hostnames and
+tampered file paths become observables the analyst can pivot on.
+
+**Proving it works:**
+
+```bash
+voc-wazuh test        # writes 10 failed SSH logins to a monitored log
+                      # (rule 5712, level 10) and tampers with a file under
+                      # realtime FIM (rule 550, level 7), then shows what the
+                      # pipeline made of them
+voc-wazuh status      # manager, enrolled agents, forwarding target
+voc-wazuh agents      # agent inventory and connection state
+voc-wazuh alerts 20   # last 20 alerts recorded by the manager
+```
+
+**Tuning.** The forwarding threshold is the `<level>` in the `<integration>`
+block of `k8s/wazuh/wazuh-manager.yaml`; drop it to 5 for a noisier demo.
+What the agents watch lives in the `agent.conf` key of the same file — the
+manager pushes it to every enrolled agent, so there is one place to change
+policy. Either way, re-run `voc-deploy wazuh` to apply. `voc-deploy no-wazuh`
+removes the whole thing and reclaims its PVC.
+
+---
+
 ## Components (all open-source, community editions)
 
 | Layer          | Tool                    | Why                                           |
@@ -174,7 +234,7 @@ both to `1.0` disables context and reverts to pure CVSS+EPSS scoring.
 | Prioritization | FastAPI service         | CVSS + EPSS + KEV weighted by asset business context |
 | Orchestration  | n8n (self-hosted)       | Visual workflows, rich connectors, error handling|
 | Case mgmt      | TheHive Community Ed.   | Built for security incidents, playbooks, Cortex|
-| SIEM *(opt-in)*| Wazuh manager           | HIDS + rules engine; API feeds the existing pipeline |
+| SIEM *(opt-in)*| Wazuh manager + agent   | HIDS + rules engine; alerts webhook into the existing pipeline |
 | Monitoring *(opt-in)* | Grafana + Prometheus | Off by default — DefectDojo + n8n already cover the lab, and the stack costs ~2 GB |
 
 ---

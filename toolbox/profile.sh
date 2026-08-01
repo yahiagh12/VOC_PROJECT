@@ -129,8 +129,12 @@ _voc_deploy_ready() {
   [ -n "$ready" ] && [ "$ready" -ge 1 ] 2>/dev/null
 }
 
+# _voc_start_pf <ns> <svc> <local:remote> [scheme]
+# `scheme` defaults to http; pass `https` for services that only speak TLS
+# (the Wazuh API), otherwise the readiness probe below never gets a response
+# and burns a full minute of retries on a tunnel that is already working.
 _voc_start_pf() {
-  local ns="$1" svc="$2" ports="$3"
+  local ns="$1" svc="$2" ports="$3" scheme="${4:-http}"
   local local_port="${ports%%:*}"
 
   # Kill any existing port-forward process (and its supervisor loop)
@@ -163,7 +167,7 @@ for p in os.listdir('/proc'):
 
   # Wait until local HTTP port actually responds
   local http_attempts=0
-  until curl -s -o /dev/null -w "%{http_code}" "http://localhost:${local_port}/" 2>/dev/null | grep -E -q "^(200|302|401|403)$" || [ $http_attempts -ge 30 ]; do
+  until curl -sk -o /dev/null -w "%{http_code}" "${scheme}://localhost:${local_port}/" 2>/dev/null | grep -E -q "^(200|302|401|403)$" || [ $http_attempts -ge 30 ]; do
     sleep 2
     http_attempts=$((http_attempts + 1))
   done
@@ -311,10 +315,49 @@ voc_deploy() {
           fi
 
           # 2. Copy and import workflow
+          #
+          # The import is NOT silenced. n8n validates workflow structure and
+          # refuses the whole file on a single bad connection; hiding that
+          # behind `|| true` means the cluster quietly keeps running an old
+          # version of the workflow while the repo says otherwise.
           kubectl cp "$REPO_DIR/n8n-workflows/voc-master-dashboard.json" "voc-core/$n8n_pod:/tmp/voc-master-dashboard.json" 2>/dev/null || true
-          kubectl exec -n voc-core "$n8n_pod" -- n8n import:workflow --input=/tmp/voc-master-dashboard.json >/dev/null 2>&1 || true
-          kubectl exec -n voc-core "$n8n_pod" -- n8n publish:workflow --id=VdT8S1MTBinkKnEH >/dev/null 2>&1 || true
-          # 3. Establish port-forward on the active pod
+          # The helm upgrade above can still be bouncing n8n-postgresql when we
+          # get here, and the import fails with "There was an error
+          # initializing DB". That is transient, so retry a few times before
+          # calling it a real failure — but a structural error in the workflow
+          # will fail all three attempts and then get reported.
+          local wf_imported=0 wf_try=1 wf_out=""
+          while [ $wf_try -le 3 ]; do
+            if wf_out=$(kubectl exec -n voc-core "$n8n_pod" -- \
+                 n8n import:workflow --input=/tmp/voc-master-dashboard.json 2>&1); then
+              echo "$wf_out" | sed 's/^/  /'
+              wf_imported=1
+              kubectl exec -n voc-core "$n8n_pod" -- n8n publish:workflow --id=VdT8S1MTBinkKnEH >/dev/null 2>&1 || true
+              break
+            fi
+            echo "[VOC] Workflow import attempt $wf_try/3 failed, retrying in 15s..."
+            sleep 15
+            wf_try=$((wf_try + 1))
+          done
+          if [ "$wf_imported" != "1" ]; then
+            echo "$wf_out" | tail -5 | sed 's/^/  /'
+            echo "[VOC] ERROR: workflow import failed — n8n is still running the previously imported version."
+            echo "[VOC]        Webhooks added or renamed in voc-master-dashboard.json will not exist."
+          fi
+
+          # 3. Restart n8n so the imported workflow's triggers register.
+          #    `n8n publish:workflow` says it outright: changes do not take
+          #    effect while n8n is running. Without this a re-imported
+          #    workflow looks correct in the UI but its webhooks 404. This
+          #    only runs when the workflow or values actually changed — the
+          #    fingerprint check above short-circuits a warm start.
+          if [ "$wf_imported" = "1" ]; then
+            echo "[VOC] Restarting n8n so the imported workflow's triggers register..."
+            kubectl rollout restart deployment/n8n -n voc-core >/dev/null 2>&1 || true
+            kubectl rollout status deployment/n8n -n voc-core --timeout=180s >/dev/null 2>&1 || \
+              echo "[VOC] WARNING: n8n restart timed out — check 'kubectl get pods -n voc-core'"
+          fi
+
           echo "[VOC] Establishing n8n port-forward on :5678..."
           _voc_start_pf voc-core n8n 5678:5678
 
@@ -342,13 +385,74 @@ voc_deploy() {
       echo "[VOC] Establishing TheHive port-forward..."
       _voc_start_pf voc-core thehive-svc 9000:9000
       ;;
-    wazuh)
-      # Opt-in SIEM. Manager only — see k8s/wazuh/wazuh-manager.yaml for why.
-      echo "[VOC] Deploying Wazuh manager (SIEM)..."
+    wazuh|siem)
+      # Opt-in SIEM: manager (voc-core) + one agent per node (voc-siem).
+      # See the header of k8s/wazuh/wazuh-manager.yaml for why there is no
+      # indexer and how alerts reach n8n and TheHive.
+      local wz_fp
+      wz_fp=$(_voc_sha "$REPO_DIR/k8s/wazuh/wazuh-manager.yaml" "$REPO_DIR/k8s/wazuh/wazuh-agent.yaml")
+      if [ "${VOC_FORCE_DEPLOY:-0}" != "1" ] && _voc_unchanged wazuh "$wz_fp" \
+         && _voc_deploy_ready voc-core wazuh-manager; then
+        echo "[VOC] Wazuh already deployed and unchanged — skipping"
+        _voc_start_pf voc-core wazuh-manager 55000:55000 https
+        return 0
+      fi
+
+      echo "[VOC] Deploying Wazuh (SIEM): manager + node agent..."
+      # The agent lives in voc-siem, which only exists once namespaces.yaml
+      # has been applied — `voc-deploy wazuh` is a valid entry point on its own.
+      kubectl apply -f "$REPO_DIR/k8s/namespaces/namespaces.yaml" >/dev/null 2>&1 || true
       kubectl apply -f "$REPO_DIR/k8s/wazuh/wazuh-manager.yaml"
-      echo "[VOC] Wazuh API will be available at https://localhost:55000 once ready."
-      echo "[VOC]   user: wazuh-wui  password: VocLabWazuh1!"
-      _voc_start_pf voc-core wazuh-manager 55000:55000
+
+      # Agents enrol with the manager's authd password. Secrets do not cross
+      # namespaces, so mirror that one key into voc-siem; the value in
+      # wazuh-manager.yaml stays the single source of truth.
+      local authd_pass
+      authd_pass=$(kubectl get secret wazuh-api-creds -n voc-core \
+        -o jsonpath='{.data.authd\.pass}' 2>/dev/null | base64 -d 2>/dev/null) || authd_pass=""
+      if [ -n "$authd_pass" ]; then
+        kubectl -n voc-siem create secret generic wazuh-enrollment \
+          --from-literal=authd.pass="$authd_pass" \
+          --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+      else
+        echo "[VOC] WARNING: could not read the enrolment password — agents will not register."
+      fi
+      kubectl apply -f "$REPO_DIR/k8s/wazuh/wazuh-agent.yaml"
+
+      # A ConfigMap change does not roll the pods that read it, and the whole
+      # manager configuration (rules, integration webhook, agent policy) lives
+      # in one. Only bounce pods that were already running: on a first deploy
+      # they have not started yet and a restart would just cost 90 seconds.
+      if _voc_deploy_ready voc-core wazuh-manager; then
+        echo "[VOC] Configuration changed — restarting manager and agents..."
+        kubectl rollout restart deployment/wazuh-manager -n voc-core >/dev/null 2>&1 || true
+        kubectl rollout restart daemonset/wazuh-agent -n voc-siem >/dev/null 2>&1 || true
+      fi
+      _voc_mark_applied wazuh "$wz_fp"
+
+      echo "[VOC] Waiting for the Wazuh manager (first boot takes 2-3 min)..."
+      kubectl rollout status deployment/wazuh-manager -n voc-core --timeout=600s || \
+        echo "[VOC] WARNING: manager not ready yet — check 'voc-wazuh logs'"
+
+      echo "[VOC] Wazuh API: https://localhost:55000  (user: wazuh-wui  password: VocLabWazuh1!)"
+      echo "[VOC] Alerts at level >= 7 are POSTed to n8n and become TheHive alerts."
+      echo "[VOC] Try: voc-wazuh status | voc-wazuh agents | voc-wazuh test"
+      _voc_start_pf voc-core wazuh-manager 55000:55000 https
+      ;;
+    no-wazuh|wazuh-off)
+      # Frees ~2 GB of RAM and the 5 Gi manager PVC. Mirrors `no-monitoring`:
+      # the manifests stay, so `voc-deploy wazuh` brings it all back.
+      echo "[VOC] Removing Wazuh (manager + agents)..."
+      kubectl delete daemonset wazuh-agent -n voc-siem --ignore-not-found >/dev/null 2>&1 || true
+      kubectl delete -f "$REPO_DIR/k8s/wazuh/wazuh-manager.yaml" --ignore-not-found >/dev/null 2>&1 || true
+      # The PVC holds the agent keys and alert history; deleting it is the
+      # point of this command (that is where the disk goes).
+      kubectl delete pvc wazuh-manager-data -n voc-core --ignore-not-found >/dev/null 2>&1 || true
+      # The mirrored enrolment secret is not in any manifest, so nothing else
+      # would ever clean it up.
+      kubectl delete secret wazuh-enrollment -n voc-siem --ignore-not-found >/dev/null 2>&1 || true
+      rm -f "$VOC_STATE_DIR/wazuh" 2>/dev/null || true
+      echo "[VOC] Wazuh removed. Re-enable with: voc-deploy wazuh"
       ;;
     targets)
       kubectl apply -f "$REPO_DIR/k8s/targets/"
@@ -482,7 +586,7 @@ voc_deploy() {
       echo "  kubectl -n voc-core get secret defectdojo-django-secret -o jsonpath='{.data.DD_ADMIN_PASSWORD}' | base64 -d"
       ;;
     *)
-      echo "Usage: voc-deploy [ns|dd|n8n|thehive|wazuh|targets|scanners|prio|monitoring|no-monitoring|all]"
+      echo "Usage: voc-deploy [ns|dd|n8n|thehive|wazuh|no-wazuh|targets|scanners|prio|monitoring|no-monitoring|all]"
       ;;
   esac
 }
@@ -601,13 +705,14 @@ Core Management:
   voc-down              Tear down k3d Kubernetes cluster
   voc-status            Display cluster status, pods, and services
   voc-deploy <comp>     Deploy component: all | n8n | defectdojo | thehive |
-                        prio | monitoring | wazuh | no-monitoring
+                        prio | monitoring | wazuh | no-monitoring | no-wazuh
   voc-refresh           Clear cached state to force a clean redeploy
 
 Scanning & Security Automation:
   voc-scan              Trigger full vulnerability scan across all targets
   voc-scan --quick      Trigger quick scan (bypasses long DAST brute-forcing)
-  voc-test-tool <t> <u> Run single scanner tool (e.g. ffuf, sqlmap, nuclei)
+  voc-test-tool <t> <u> Run one tool: katana | ffuf | sqlmap | xss | nuclei
+                        (katana only crawls — it produces URLs, not findings)
   voc-history           View historical scan runs and finding counts
   voc-history --run <N> View detailed breakdown for a specific scan run
 
@@ -615,6 +720,14 @@ Prioritization Engine (CVSS + EPSS + KEV × Asset Context):
   voc-prio              Run prioritization scoring pass over DefectDojo
   voc-assets            List configured business assets & criticality factors
   voc-prio-explain <ID> Explain priority score calculation for finding ID
+
+SIEM / Host Intrusion Detection (opt-in: VOC_ENABLE_WAZUH=1):
+  voc-wazuh status      Wazuh manager, enrolled agents, alert forwarding
+  voc-wazuh agents      List agents and their connection state
+  voc-wazuh alerts [N]  Show the last N alerts the manager recorded
+  voc-wazuh test        Fire benign test events and follow them through the
+                        pipeline into TheHive
+  voc-wazuh api <path>  Raw Wazuh REST API call
 
 Cluster & Troubleshooting Helpers:
   voc-sync-keys         Synchronize DefectDojo & TheHive API keys across pods
@@ -662,6 +775,193 @@ voc_prio_explain() {
 }
 voc_assets()       { _voc_prio_curl "/assets" GET; }
 
+# --- Wazuh / SIEM helpers ---------------------------------------------
+_voc_wazuh_pod() {
+  kubectl get pod -n voc-core -l app=wazuh-manager \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
+}
+
+_voc_wazuh_agent_pod() {
+  kubectl get pod -n voc-siem -l app=wazuh-agent \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
+}
+
+# _voc_wazuh_api <path> [method] : call the Wazuh REST API from inside the
+# manager pod. Doing it in-cluster means this works whether or not the
+# :55000 port-forward is up, and the credentials never leave the pod.
+_voc_wazuh_api() {
+  local path="${1:-/}" method="${2:-GET}"
+  local pod; pod=$(_voc_wazuh_pod)
+  if [ -z "$pod" ]; then
+    echo "[VOC] Wazuh manager is not deployed. Run: voc-deploy wazuh"
+    return 1
+  fi
+  local user pass
+  user=$(kubectl get secret wazuh-api-creds -n voc-core -o jsonpath='{.data.API_USERNAME}' 2>/dev/null | base64 -d)
+  pass=$(kubectl get secret wazuh-api-creds -n voc-core -o jsonpath='{.data.API_PASSWORD}' 2>/dev/null | base64 -d)
+  # Credentials go through env rather than string interpolation so a password
+  # containing shell metacharacters cannot break (or escape) the command.
+  kubectl exec -n voc-core "$pod" -- env WZ_USER="$user" WZ_PASS="$pass" \
+    WZ_PATH="$path" WZ_METHOD="$method" sh -c '
+      TOKEN=$(curl -sku "$WZ_USER:$WZ_PASS" -X POST \
+        "https://localhost:55000/security/user/authenticate?raw=true")
+      if [ -z "$TOKEN" ]; then
+        echo "[VOC] Wazuh API authentication failed (check the wazuh-api-creds secret)."
+        exit 1
+      fi
+      curl -sk -X "$WZ_METHOD" -H "Authorization: Bearer $TOKEN" \
+        "https://localhost:55000${WZ_PATH}"
+    ' 2>/dev/null
+}
+
+voc_wazuh() {
+  local cmd="${1:-status}"; shift 2>/dev/null || true
+  case "$cmd" in
+    status)
+      echo "=== Wazuh pods ==="
+      kubectl get pods -n voc-core -l app=wazuh-manager 2>/dev/null || true
+      kubectl get pods -n voc-siem -l app=wazuh-agent 2>/dev/null || true
+      echo ""
+      echo "=== Manager ==="
+      _voc_wazuh_api "/manager/info?pretty=true" | \
+        grep -E '"version"|"type"|"max_agents"' || echo "  (API not reachable)"
+      echo ""
+      echo "=== Enrolled agents ==="
+      voc_wazuh agents
+      echo ""
+      echo "=== Alert forwarding ==="
+      local pod; pod=$(_voc_wazuh_pod)
+      if [ -n "$pod" ]; then
+        kubectl exec -n voc-core "$pod" -- sh -c \
+          'grep -c . /var/ossec/logs/alerts/alerts.json 2>/dev/null || echo 0' | \
+          sed 's/^/  alerts recorded: /'
+        kubectl exec -n voc-core "$pod" -- sh -c \
+          'grep -o "<hook_url>.*</hook_url>" /var/ossec/etc/ossec.conf' 2>/dev/null | \
+          sed 's/^/  webhook: /'
+      fi
+      ;;
+    agents)
+      # One line per agent instead of 40 lines of JSON envelope.
+      _voc_wazuh_api "/agents?select=id,name,ip,status,version,lastKeepAlive&sort=id" | \
+        python3 -c '
+import json, sys
+try:
+    items = json.load(sys.stdin)["data"]["affected_items"]
+except Exception:
+    print("  (no agent data — is the manager running?)"); raise SystemExit(0)
+print("  %-4s %-34s %-15s %-10s %s" % ("ID", "NAME", "IP", "STATUS", "VERSION"))
+for a in items:
+    print("  %-4s %-34s %-15s %-10s %s" % (
+        a.get("id", "?"), a.get("name", "?")[:34], a.get("ip", "-"),
+        a.get("status", "?"), a.get("version", "-")))
+' 2>/dev/null || echo "  (agent list unavailable)"
+      ;;
+    alerts)
+      local n="${1:-20}"
+      local pod; pod=$(_voc_wazuh_pod)
+      if [ -z "$pod" ]; then echo "[VOC] Wazuh manager is not deployed."; return 1; fi
+      # Alerts live in the manager's own log, not the API — there is no
+      # indexer to query. See k8s/wazuh/wazuh-manager.yaml.
+      kubectl exec -n voc-core "$pod" -- sh -c \
+        "tail -n $n /var/ossec/logs/alerts/alerts.json 2>/dev/null" | \
+        python3 -c '
+import json, sys
+rows = 0
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        a = json.loads(line)
+    except Exception:
+        continue
+    rows += 1
+    rule = a.get("rule", {})
+    print("  [%s] L%-2s rule %-6s %s  (agent: %s)" % (
+        a.get("timestamp", "")[:19], rule.get("level", "?"), rule.get("id", "?"),
+        (rule.get("description") or "")[:70], a.get("agent", {}).get("name", "-")))
+if not rows:
+    print("  (no alerts yet — try: voc-wazuh test)")
+' 2>/dev/null || echo "  (could not read alerts)"
+      ;;
+    test)
+      # Proves the whole chain without touching anything real:
+      #   agent event -> manager rules -> integrator -> n8n -> TheHive
+      local apod; apod=$(_voc_wazuh_agent_pod)
+      if [ -z "$apod" ]; then
+        echo "[VOC] No Wazuh agent pod found in voc-siem. Run: voc-deploy wazuh"
+        return 1
+      fi
+      echo "[VOC] Generating test events on agent pod $apod..."
+
+      # 1. Authentication attack. Eight failures inside two minutes is what
+      #    rule 5712 ("sshd brute force") looks for; level 10, well above the
+      #    level 7 forwarding threshold.
+      kubectl exec -n voc-siem "$apod" -- sh -c '
+        # The syslog pre-decoder needs "<date> <host> <program>[pid]:" — with
+        # an empty hostname the line never reaches a rule. `hostname` is not
+        # in the agent image, so take the one Docker puts in the environment.
+        HOST=${HOSTNAME:-voc-agent}
+        STAMP=$(date "+%b %d %H:%M:%S")
+        i=1
+        while [ $i -le 10 ]; do
+          echo "$STAMP $HOST sshd[4242]: Failed password for invalid user admin from 203.0.113.77 port 5$i ssh2" \
+            >> /var/log/voc-audit.log
+          i=$((i + 1))
+        done
+      ' 2>/dev/null && echo "  - 10 failed SSH logins written (expect rule 5710 + 5712)"
+
+      # 2. File integrity. Creating a file is only level 5; modifying one
+      #    that syscheck has already baselined is rule 550 at level 7.
+      kubectl exec -n voc-siem "$apod" -- sh -c '
+        mkdir -p /var/ossec/fim-test
+        echo "voc-baseline" > /var/ossec/fim-test/canary.txt
+      ' 2>/dev/null
+      echo "  - FIM canary created, waiting for the realtime baseline..."
+      sleep 10
+      kubectl exec -n voc-siem "$apod" -- sh -c \
+        'echo "tampered-by-voc-wazuh-test" >> /var/ossec/fim-test/canary.txt' 2>/dev/null \
+        && echo "  - FIM canary modified (expect rule 550)"
+
+      echo "[VOC] Waiting 25s for the manager to correlate and forward..."
+      sleep 25
+      echo ""
+      echo "=== Most recent alerts ==="
+      voc_wazuh alerts 15
+      echo ""
+      echo "=== Alerts forwarded to n8n ==="
+      local pod; pod=$(_voc_wazuh_pod)
+      kubectl exec -n voc-core "$pod" -- sh -c \
+        'tail -n 5 /var/ossec/logs/integrations.log 2>/dev/null || echo "  (no integrations.log yet)"' 2>/dev/null
+      echo ""
+      echo "[VOC] Check TheHive for the resulting alerts: http://localhost:9000"
+      ;;
+    logs)
+      local pod; pod=$(_voc_wazuh_pod)
+      [ -z "$pod" ] && { echo "[VOC] Wazuh manager is not deployed."; return 1; }
+      kubectl exec -n voc-core "$pod" -- tail -n "${1:-60}" /var/ossec/logs/ossec.log
+      ;;
+    api)
+      # Escape hatch: voc-wazuh api /agents/summary/status
+      [ -z "${1:-}" ] && { echo "Usage: voc-wazuh api <path> [METHOD]"; return 1; }
+      _voc_wazuh_api "$1" "${2:-GET}"
+      ;;
+    *)
+      cat << 'EOF'
+Usage: voc-wazuh <command>
+
+  status          Manager, agents, and where alerts are being forwarded
+  agents          Enrolled agents and their connection state
+  alerts [N]      Last N alerts recorded by the manager (default 20)
+  test            Generate benign attack + file-tampering events and show
+                  what the pipeline made of them
+  logs [N]        Tail the manager's ossec.log
+  api <path>      Raw Wazuh REST API call, e.g. api /agents/summary/status
+EOF
+      ;;
+  esac
+}
+
 voc_refresh() {
   rm -rf "$VOC_STATE_DIR"
   echo "[VOC] Deployment state cleared — next start will do a full redeploy."
@@ -684,6 +984,8 @@ alias voc-sync-keys="voc_sync_keys"
 alias voc-prio="voc_prio"
 alias voc-prio-explain="voc_prio_explain"
 alias voc-assets="voc_assets"
+alias voc-wazuh="voc_wazuh"
+alias voc-siem="voc_wazuh"
 alias voc-refresh="voc_refresh"
 
 # Short Shorthand Aliases

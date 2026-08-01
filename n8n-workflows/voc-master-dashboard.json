@@ -551,7 +551,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Just hands off the list of targets \u2014 the actual pinging happens in the\n// HTTP Request nodes downstream.\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    checks: [\n      { name: 'defectdojo', url: 'http://defectdojo-django.voc-core.svc.cluster.local/' },\n      { name: 'prioritization', url: 'http://prioritization-service.voc-core.svc.cluster.local:8000/healthz' },\n      { name: 'juice-shop', url: 'http://juice-shop.targets.svc.cluster.local:3000/' },\n      { name: 'dvwa', url: 'http://dvwa.targets.svc.cluster.local/' },\n      { name: 'thehive', url: 'http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public' },\n      { name: 'grafana', url: 'http://kps-grafana.monitoring.svc.cluster.local/api/health' }\n    ]\n  }\n}];"
+        "jsCode": "// Just hands off the list of targets \u2014 the actual pinging happens in the\n// HTTP Request nodes downstream.\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    checks: [\n      { name: 'defectdojo', url: 'http://defectdojo-django.voc-core.svc.cluster.local/' },\n      { name: 'prioritization', url: 'http://prioritization-service.voc-core.svc.cluster.local:8000/healthz' },\n      { name: 'juice-shop', url: 'http://juice-shop.targets.svc.cluster.local:3000/' },\n      { name: 'dvwa', url: 'http://dvwa.targets.svc.cluster.local/' },\n      { name: 'thehive', url: 'http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public' },\n      { name: 'wazuh', url: 'https://wazuh-manager.voc-core.svc.cluster.local:55000/' }\n    ]\n  }\n}];"
       },
       "id": "health-list",
       "name": "Health Check Targets",
@@ -636,7 +636,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Aggregate health check results\nconst dd = $('Ping DefectDojo').first()?.json;\nconst prio = $('Ping Prioritization').first()?.json;\nconst juice = $('Ping Juice Shop').first()?.json;\nconst dvwa = $('Ping DVWA').first()?.json;\nlet thehive = null;\ntry { thehive = $('Ping TheHive').first()?.json; } catch(e) {}\nlet grafana = null;\ntry { grafana = $('Ping Grafana').first()?.json; } catch(e) {}\n\nfunction toStatus(resp, name) {\n  if (!resp) return { name, status: 'unknown' };\n  if (resp.error || resp.message?.includes('ECONNREFUSED')) {\n    return { name, status: 'unhealthy', error: resp.message || resp.error };\n  }\n  return { name, status: 'healthy' };\n}\n\nconst results = [\n  toStatus(dd, 'DefectDojo'),\n  toStatus(prio, 'Prioritization Service'),\n  toStatus(juice, 'Juice Shop'),\n  toStatus(dvwa, 'DVWA'),\n  toStatus(thehive, 'TheHive'),\n  toStatus(grafana, 'Grafana')\n];\n\nconst allHealthy = results.every(r => r.status === 'healthy');\n\n// Store in static data for dashboard access\nconst staticData = $getWorkflowStaticData('global');\nstaticData.lastHealthCheck = {\n  timestamp: new Date().toISOString(),\n  overall: allHealthy ? 'healthy' : 'degraded',\n  services: results\n};\n\nconsole.log(`[VOC Health] ${allHealthy ? 'All services healthy' : 'Some services unhealthy: ' + results.filter(r => r.status !== 'healthy').map(r => r.name).join(', ')}`);\n\nreturn [{ json: staticData.lastHealthCheck }];"
+        "jsCode": "// Aggregate health check results\nconst dd = $('Ping DefectDojo').first()?.json;\nconst prio = $('Ping Prioritization').first()?.json;\nconst juice = $('Ping Juice Shop').first()?.json;\nconst dvwa = $('Ping DVWA').first()?.json;\nlet thehive = null;\ntry { thehive = $('Ping TheHive').first()?.json; } catch(e) {}\nlet grafana = null;\ntry { grafana = $('Ping Grafana').first()?.json; } catch(e) {}\n// Wazuh is opt-in (VOC_ENABLE_WAZUH=1); when it is not deployed the node\n// never ran and this stays null, which toStatus reports as 'unknown'.\nlet wazuh = null;\ntry { wazuh = $('Ping Wazuh').first()?.json; } catch(e) {}\n\nfunction toStatus(resp, name) {\n  if (!resp) return { name, status: 'unknown' };\n  if (resp.error || resp.message?.includes('ECONNREFUSED')) {\n    return { name, status: 'unhealthy', error: resp.message || resp.error };\n  }\n  return { name, status: 'healthy' };\n}\n\nconst results = [\n  toStatus(dd, 'DefectDojo'),\n  toStatus(prio, 'Prioritization Service'),\n  toStatus(juice, 'Juice Shop'),\n  toStatus(dvwa, 'DVWA'),\n  toStatus(thehive, 'TheHive'),\n  toStatus(grafana, 'Grafana'),\n  toStatus(wazuh, 'Wazuh SIEM')\n];\n\nconst allHealthy = results.every(r => r.status !== 'unhealthy');\n\n// Store in static data for dashboard access\nconst staticData = $getWorkflowStaticData('global');\nstaticData.lastHealthCheck = {\n  timestamp: new Date().toISOString(),\n  overall: allHealthy ? 'healthy' : 'degraded',\n  services: results\n};\n\nconsole.log(`[VOC Health] ${allHealthy ? 'All services healthy' : 'Some services unhealthy: ' + results.filter(r => r.status !== 'healthy').map(r => r.name).join(', ')}`);\n\nreturn [{ json: staticData.lastHealthCheck }];"
       },
       "id": "aggregate-health",
       "name": "Aggregate Health",
@@ -757,6 +757,108 @@
         300,
         960
       ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voc/alert/wazuh",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "wh-wazuh-alert",
+      "name": "Webhook: Wazuh Alert",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -600,
+        1700
+      ],
+      "webhookId": "voc-alert-wazuh"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Wazuh's integrator daemon POSTs one alert per request. The `shuffle`\n// integration is a plain JSON webhook forwarder, so the body looks like:\n//   { severity, title, text, rule_id, timestamp, id, all_fields: <full alert> }\n// `all_fields` is the complete alert as written to /var/ossec/logs/alerts/alerts.json.\nconst payload = $input.first().json?.body ?? $input.first().json ?? {};\nconst alert = payload.all_fields || payload;\nconst rule = alert.rule || {};\nconst agent = alert.agent || {};\nconst level = Number(rule.level ?? 0);\n\n// The manager already filters on <level> (see k8s/wazuh/wazuh-manager.yaml),\n// but re-check here so lowering that threshold for a debug session cannot\n// quietly flood TheHive with informational events.\nif (level < 7) {\n  return [];\n}\n\n// Wazuh rule level (0-15) -> TheHive severity (1-4).\n//   7-9   suspicious activity       -> MEDIUM\n//   10-11 attack / policy violation -> HIGH\n//   12+   likely successful compromise -> CRITICAL\nconst severity = level >= 12 ? 4 : level >= 10 ? 3 : 2;\n\nconst mitre = rule.mitre || {};\nconst tags = ['wazuh', 'siem', 'auto-created', 'level-' + level, 'rule-' + (rule.id || 'unknown')]\n  .concat((rule.groups || []).slice(0, 5))\n  .concat((mitre.id || []).map(t => 'mitre-' + t))\n  .filter(Boolean);\n\n// Observables give the analyst something to pivot on inside TheHive instead\n// of a wall of text.\nconst observables = [];\nconst push = (dataType, data, message) => {\n  if (data) observables.push({ dataType, data: String(data), message });\n};\npush('ip', alert.data?.srcip, 'Source IP of the event');\npush('hostname', agent.name, 'Wazuh agent that reported the event');\npush('ip', agent.ip, 'Agent IP');\npush('filename', alert.syscheck?.path, 'File that triggered the integrity alert');\npush('other', alert.data?.srcuser || alert.data?.dstuser, 'User involved in the event');\n\nconst description = [\n  'Detected by Wazuh (HIDS/SIEM) and routed here by the VOC n8n pipeline.',\n  '',\n  'Rule:     ' + (rule.id || 'n/a') + ' - ' + (rule.description || 'n/a'),\n  'Level:    ' + level + '/15',\n  'Groups:   ' + ((rule.groups || []).join(', ') || 'n/a'),\n  (mitre.id || []).length\n    ? 'MITRE:    ' + mitre.id.join(', ') + ' (' + ((mitre.technique || []).join(', ') || 'n/a') + ')'\n    : null,\n  'Agent:    ' + (agent.name || 'n/a') + ' (id ' + (agent.id || 'n/a') + (agent.ip ? ', ' + agent.ip : '') + ')',\n  'Location: ' + (alert.location || 'n/a'),\n  'Fired at: ' + (alert.timestamp || 'n/a'),\n  '',\n  'Raw event:',\n  '```',\n  String(alert.full_log || JSON.stringify(alert.data || {}, null, 2) || 'n/a').slice(0, 2000),\n  '```',\n].filter(line => line !== null).join('\\n');\n\nreturn [{\n  json: {\n    // alert.id is Wazuh's own \"<epoch>.<offset>\" identifier, unique per\n    // alert, so TheHive dedupes replays of the same event by itself.\n    sourceRef: 'wazuh-' + (alert.id || (rule.id + '-' + Date.now())),\n    title: '[SIEM L' + level + '] ' + (rule.description || 'Wazuh alert'),\n    description,\n    severity,\n    tags,\n    observables,\n    ruleId: rule.id || null,\n    level,\n    agentName: agent.name || null,\n  },\n}];"
+      },
+      "id": "wazuh-normalize",
+      "name": "Normalize Wazuh Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/alert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.N8N_THEHIVE_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ type: 'wazuh-alert', source: 'Wazuh', sourceRef: $json.sourceRef, title: $json.title, description: $json.description, severity: $json.severity, tags: $json.tags, observables: $json.observables, tlp: 2, pap: 2 }) }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 10000
+        }
+      },
+      "id": "thehive-wazuh-alert",
+      "name": "Create TheHive Alert (Wazuh)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        1700
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://wazuh-manager.voc-core.svc.cluster.local:55000/",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 5000
+        }
+      },
+      "id": "health-wazuh",
+      "name": "Ping Wazuh",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        1200
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://thehive-svc.voc-core.svc.cluster.local:9000/api/v1/status/public",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "health-thehive",
+      "name": "Ping TheHive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        880
+      ],
+      "onError": "continueErrorOutput"
     }
   ],
   "connections": {
@@ -1035,7 +1137,7 @@
             "index": 0
           },
           {
-            "node": "Ping Grafana",
+            "node": "Ping Wazuh",
             "type": "main",
             "index": 0
           }
@@ -1132,24 +1234,6 @@
         ]
       ]
     },
-    "Ping Grafana": {
-      "main": [
-        [
-          {
-            "node": "Merge Health Checks",
-            "type": "main",
-            "index": 5
-          }
-        ],
-        [
-          {
-            "node": "Merge Health Checks",
-            "type": "main",
-            "index": 5
-          }
-        ]
-      ]
-    },
     "Poll Findings (5 min)": {
       "main": [
         [
@@ -1190,6 +1274,46 @@
             "node": "Aggregate Health",
             "type": "main",
             "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook: Wazuh Alert": {
+      "main": [
+        [
+          {
+            "node": "Normalize Wazuh Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Wazuh Alert": {
+      "main": [
+        [
+          {
+            "node": "Create TheHive Alert (Wazuh)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ping Wazuh": {
+      "main": [
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 5
+          }
+        ],
+        [
+          {
+            "node": "Merge Health Checks",
+            "type": "main",
+            "index": 5
           }
         ]
       ]

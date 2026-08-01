@@ -1,0 +1,1854 @@
+\documentclass[12pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+% \usepackage[french]{babel}
+\usepackage{placeins} 
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{float}
+\usepackage{amsmath}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usepackage{mdframed}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds}
+
+\geometry{hmargin=2.5cm,vmargin=2.5cm}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    urlcolor=blue,
+    citecolor=black
+}
+
+% ---- Listing style ----
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    literate={é}{{\'{e}}}1 {è}{{\`{e}}}1 {ê}{{\^{e}}}1 {à}{{\`{a}}}1 {ù}{{\`{u}}}1
+              {î}{{\^{i}}}1 {ô}{{\^{o}}}1 {û}{{\^{u}}}1 {ç}{{\c{c}}}1
+}
+
+% ---- Listing style for YAML ----
+\lstdefinelanguage{yaml}{
+    keywords={true,false,null,yes,no},
+    sensitive=false,
+    comment=[l]{\#},
+    morestring=[b]',
+    morestring=[b]",
+}
+
+% ---- Listing style for Dockerfile ----
+\lstdefinelanguage{Dockerfile}{
+    morekeywords={FROM, RUN, CMD, LABEL, EXPOSE, ENV, ADD, COPY, ENTRYPOINT,
+                  VOLUME, USER, WORKDIR, ARG, ONBUILD, STOPSIGNAL, HEALTHCHECK},
+    morestring=[b]",
+    morestring=[b]',
+    comment=[l]{\#},
+    sensitive=true,
+}
+
+% ---- Screenshot placeholder box ----
+\newcommand{\screenshot}[2]{%
+  \begin{mdframed}[backgroundcolor=gray!8, linecolor=gray!50, linewidth=1pt,
+                   innertopmargin=8pt, innerbottommargin=8pt]
+    \centering
+    {\small\texttt{�� SCREENSHOT NEEDED}}\\[0.3em]
+    {\footnotesize #1}\\[0.2em]
+    {\scriptsize\color{gray} #2}
+  \end{mdframed}%
+}
+
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+
+% ============================================================
+\begin{document}
+% ============================================================
+
+%%% PAGE DE GARDE
+\thispagestyle{empty}
+\hspace{-1cm}
+\begin{center}
+    \includegraphics[width=0.4\columnwidth]{images/tekup.jpg}
+\end{center}
+\begin{center}
+{\large{\textbf{\textsc{Rapport de Stage}}}}\\
+\end{center}
+\vskip1cm
+\begin{center}
+\textrm{Réalisé par~:}\\
+{\large\textbf{Ben Lazreg Yassine \& Gharsallah Yahia}}\\
+\vskip1cm
+{\huge\textbf{Conception et Déploiement d'un Vulnerability Operations Center (VOC) Avancé}}\\
+\end{center}
+\vskip1cm
+\begin{center}
+\begin{minipage}[c]{0.29\columnwidth}
+Encadrant professionnel~:\\
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.29\columnwidth}
+\textbf{Mohamed Helmi Messaoudi}\\
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.29\columnwidth}
+Responsable Sécurité SI\\
+\end{minipage}
+\end{center}
+\vskip1cm
+\begin{center}
+{Effectué au sein de la STB Bank}\\
+\vskip1cm
+\includegraphics[width=0.3\columnwidth]{images/Logo_STB.png}
+\end{center}
+\vskip1cm
+\begin{center}
+{\textrm{Année universitaire~: 2024--2025}}\\
+\end{center}
+\newpage
+
+% ============================================================
+\thispagestyle{empty}
+\section*{Remerciements}
+\addcontentsline{toc}{chapter}{Remerciements}
+
+Nous tenons à exprimer notre sincère gratitude à toutes les personnes qui ont contribué à la réalisation de ce projet de stage.
+
+Nous adressons nos remerciements les plus chaleureux à \textbf{M. Mohamed Helmi Messaoudi}, notre encadrant professionnel à la STB Bank, pour son accompagnement, son soutien et ses conseils précieux tout au long de ce projet. Son expertise en cybersécurité et en gestion des infrastructures a été déterminante dans l'orientation de nos travaux.
+
+Nous sommes reconnaissants envers le corps enseignant et l'administration de l'\textbf{Université TEK-UP} pour la formation académique solide qu'ils nous ont dispensée et pour l'opportunité d'effectuer ce stage.
+
+Nous remercions également l'\textbf{équipe Sécurité des Systèmes d'Information de la STB Bank} pour leur coopération et pour nous avoir donné accès aux ressources nécessaires au développement et aux tests du Vulnerability Operations Center.
+
+Enfin, nous souhaitons remercier nos familles et nos amis pour leur soutien indéfectible et leurs encouragements tout au long de notre parcours académique.
+\newpage
+
+% ============================================================
+\thispagestyle{empty}
+\section*{Résumé}
+\addcontentsline{toc}{chapter}{Résumé}
+
+La gestion des vulnérabilités dans les systèmes d'information modernes repose sur une multitude de scanners dont les résultats, hétérogènes et classés par sévérité technique (CVSS), ne reflètent pas le risque réel pour l'organisation. Ce rapport présente la conception, le déploiement et la validation d'un \emph{Vulnerability Operations Center} (VOC) centralisé, entièrement open-source, qui automatise la détection, la centralisation et la priorisation des vulnérabilités en intégrant le contexte métier de chaque actif.
+
+Le système est déployé sur Kubernetes (k3d) à l'intérieur d'un conteneur Docker dédié (le «~toolbox~»), ce qui garantit un environnement reproductible en un seul clic depuis Windows. Il orchestre cinq scanners complémentaires --- Grype (SCA), Nuclei (DAST), ffuf (fuzzing), SQLMap (injection SQL) et XSStrike (XSS) --- dont les résultats sont normalisés, dédupliqués et importés dans DefectDojo. Un service de priorisation développé en FastAPI applique un modèle à trois dimensions combinant le score technique (CVSS), la menace active (EPSS, CISA KEV) et le contexte métier (exposition réseau, criticité, classification des données). L'orchestration via n8n et la gestion des incidents via TheHive complètent le pipeline.
+
+Les résultats montrent que le modèle de priorisation réordonne significativement les vulnérabilités~: un finding \texttt{MEDIUM} sur un portail de paiement exposé sur Internet est reclassé \texttt{CRITICAL}, tandis qu'un finding \texttt{HIGH} sur une application interne sans enjeu métier est rétrogradé en \texttt{MEDIUM}. Ce réordonnement permet aux équipes de remédiation de traiter en priorité les vulnérabilités présentant le risque réel le plus élevé.
+
+\vspace{1cm}
+\textbf{Mots-clés~:} gestion des vulnérabilités, priorisation contextuelle, CVSS, EPSS, CISA KEV, Docker, Kubernetes, DevSecOps, open-source, FastAPI.
+\newpage
+
+% ============================================================
+\tableofcontents
+\newpage
+\listoffigures
+\listoftables
+\newpage
+
+
+% ============================================================
+\chapter{Introduction}
+% ============================================================
+
+\section{Contexte}
+La gestion des vulnérabilités dans une infrastructure moderne nécessite l'utilisation de multiples outils pour couvrir les différentes couches (réseau, web, conteneurs). Chaque outil produit ses résultats dans un format propre, avec des niveaux de sévérité hétérogènes, ce qui rend la consolidation manuelle coûteuse et sujette à erreur. L'objectif de ce projet est de déployer un «~Vulnerability Operations Center~» (VOC) centralisé qui automatise la détection, la centralisation et la priorisation des vulnérabilités dans un environnement 100\% open-source et reproductible.
+
+\section{Problématique}
+Les outils de scan produisent des centaines de findings classés par sévérité technique (CVSS). Or, un finding \texttt{HIGH} sur un serveur RH interne n'a pas le même impact qu'un finding \texttt{MEDIUM} sur un portail de paiement exposé sur Internet. La sévérité seule ne suffit pas~: il faut un modèle de priorisation qui intègre le contexte métier de chaque actif.
+
+L'objectif est de mettre en évidence un petit nombre de causes racines qui, une fois corrigées, résoudront un grand nombre de vulnérabilités sous-jacentes (ex~: 10 correctifs pour 100 vulnérabilités résolues). Par ailleurs, la reproductibilité est un impératif~: un autre ingénieur doit pouvoir recréer l'environnement complet avec une seule commande.
+
+\section{Périmètre}
+Le projet couvre~:
+\begin{itemize}[nosep]
+    \item Le déploiement automatisé d'un cluster Kubernetes local via une infrastructure Docker conteneurisée.
+    \item L'intégration de cinq scanners open-source couvrant SCA, DAST, SQLi, XSS et fuzzing.
+    \item Un service de priorisation basé sur CVSS, EPSS, CISA KEV et le contexte métier.
+    \item L'orchestration des scans et le routage des incidents via n8n et TheHive.
+    \item Un stack de monitoring global (Grafana + Prometheus) qui supervise aussi bien la santé des ressources du système que la santé des vulnérabilités de manière unifiée.
+\end{itemize}
+
+\section{Organisation du Rapport}
+Ce rapport est organisé comme suit~:
+\begin{itemize}[nosep]
+    \item \textbf{Chapitre~2}~: Architecture globale et choix des outils.
+    \item \textbf{Chapitre~3}~: Environnement de laboratoire et cibles vulnérables.
+    \item \textbf{Chapitre~4}~: Dockerisation et conteneurisation.
+    \item \textbf{Chapitre~5}~: Déploiement de l'infrastructure Kubernetes.
+    \item \textbf{Chapitre~6}~: Pipeline de scan complet.
+    \item \textbf{Chapitre~7}~: Normalisation et import des résultats.
+    \item \textbf{Chapitre~8}~: Modèle de priorisation.
+    \item \textbf{Chapitre~9}~: Orchestration et gestion des incidents.
+    \item \textbf{Chapitre~10}~: Automatisation et reproductibilité.
+    \item \textbf{Chapitre~11}~: Résultats et analyse.
+    \item \textbf{Chapitre~12}~: Difficultés rencontrées et solutions.
+    \item \textbf{Chapitre~13}~: Conclusion et perspectives.
+\end{itemize}
+
+
+% ============================================================
+\chapter{Architecture et Choix des Outils}
+% ============================================================
+
+\section{Architecture Globale}
+L'architecture repose sur cinq couches~: conteneurisation (Docker), cluster Kubernetes (k3d), scanners de détection, agrégation/priorisation (DefectDojo + FastAPI), et orchestration/gestion d'incidents (n8n + TheHive).
+
+Le flux suit trois phases~:
+\begin{enumerate}[nosep]
+    \item \textbf{Découverte~:} Katana crawle les cibles et produit un inventaire d'URLs.
+    \item \textbf{Scan~:} Grype, Nuclei, ffuf, SQLMap et XSStrike exploitent cet inventaire.
+    \item \textbf{Centralisation~:} les résultats sont normalisés, importés dans DefectDojo, scorés par le service de priorisation, et les findings critiques sont routés vers TheHive.
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    \resizebox{\textwidth}{!}{%
+    \begin{tikzpicture}[
+        node distance=1.2cm and 1.5cm,
+        box/.style={rectangle, draw, rounded corners, minimum height=1cm, minimum width=2.8cm, align=center, font=\small},
+        scanner/.style={box, fill=blue!15},
+        platform/.style={box, fill=green!15},
+        orchest/.style={box, fill=orange!15},
+        monitor/.style={box, fill=purple!15},
+        target/.style={box, fill=red!10},
+        docker/.style={box, fill=cyan!10},
+        arrow/.style={-{Stealth[length=3mm]}, thick},
+    ]
+        % Docker layer
+        \node[docker] (toolbox) {Toolbox\\{\footnotesize (Debian + kubectl\\helm · k3d · yq)}};
+        \node[docker, right=2cm of toolbox] (prio-img) {Prio Service\\{\footnotesize (Python:3.12-slim)}};
+
+        % Targets
+        \node[target, below=1.8cm of toolbox, xshift=3cm] (js) {Juice Shop\\{\footnotesize (portail paiement)}};
+        \node[target, right=of js] (dvwa) {DVWA\\{\footnotesize (app RH interne)}};
+
+        % Scanners
+        \node[scanner, below=1.5cm of js, xshift=-3cm] (katana) {Katana\\{\footnotesize Crawling}};
+        \node[scanner, right=of katana] (grype) {Grype\\{\footnotesize SCA}};
+        \node[scanner, right=of grype] (nuclei) {Nuclei\\{\footnotesize DAST}};
+        \node[scanner, right=of nuclei] (ffuf) {ffuf\\{\footnotesize Fuzzing}};
+        \node[scanner, right=of ffuf] (sqlmap) {SQLMap\\{\footnotesize SQLi}};
+        \node[scanner, right=of sqlmap] (xsstrike) {XSStrike\\{\footnotesize XSS}};
+
+        % Platform
+        \node[platform, below=1.5cm of nuclei, xshift=0.5cm] (dojo) {DefectDojo\\{\footnotesize Agrégation}};
+        \node[platform, right=2.5cm of dojo] (prio) {Prioritization\\Service\\{\footnotesize FastAPI}};
+
+        % Orchestration
+        \node[orchest, below=1.5cm of dojo] (n8n) {n8n\\{\footnotesize Orchestration}};
+        \node[orchest, right=2.5cm of n8n] (hive) {TheHive\\{\footnotesize Gestion de cas}};
+
+        % Monitoring
+        \node[monitor, left=2cm of n8n] (grafana) {Grafana\\{\footnotesize Dashboards}};
+        \node[monitor, below=0.8cm of grafana] (prom) {Prometheus\\{\footnotesize Métriques}};
+
+        % Docker arrows
+        \draw[arrow, dashed, cyan!60!black] (toolbox.south) -- ++(0,-0.4) -| (katana.north);
+        \draw[arrow, dashed, cyan!60!black] (prio-img.south) -- (prio.north);
+
+        % Arrows: targets to scanners
+        \draw[arrow, dashed] (js.south) -- ++(0,-0.5) -| (katana.north);
+        \draw[arrow, dashed] (js.south) -- ++(0,-0.5) -| (nuclei.north);
+        \draw[arrow, dashed] (dvwa.south) -- ++(0,-0.5) -| (sqlmap.north);
+        \draw[arrow, dashed] (dvwa.south) -- ++(0,-0.5) -| (xsstrike.north);
+
+        % Arrows: scanners to dojo
+        \draw[arrow] (katana.south) -- ++(0,-0.4) -| (dojo.north west);
+        \draw[arrow] (grype.south) -- ++(0,-0.4) -| ([xshift=-0.3cm]dojo.north);
+        \draw[arrow] (nuclei.south) -- (dojo.north);
+        \draw[arrow] (sqlmap.south) -- ++(0,-0.4) -| ([xshift=0.3cm]dojo.north);
+        \draw[arrow] (ffuf.south) -- ++(0,-0.4) -| (dojo.north east);
+        \draw[arrow] (xsstrike.south) -- ++(0,-0.4) -| ([xshift=0.8cm]dojo.north east);
+
+        % Dojo to Prio
+        \draw[arrow, <->] (dojo.east) -- node[above, font=\footnotesize] {API REST} (prio.west);
+
+        % Dojo to n8n
+        \draw[arrow] (dojo.south) -- (n8n.north);
+
+        % n8n to TheHive
+        \draw[arrow] (n8n.east) -- node[above, font=\footnotesize] {Cas critiques} (hive.west);
+
+        % Monitoring
+        \draw[arrow, dashed] (prom.east) -- ++(1,0) |- (dojo.west);
+        \draw[arrow] (prom.north) -- (grafana.south);
+    \end{tikzpicture}
+    }
+    \caption{Architecture globale du VOC --- des images Docker aux findings priorisés}
+    \label{fig:architecture}
+\end{figure}
+
+\section{Choix des Outils}
+Contrainte principale~: environnement 100\% open-source.
+
+\begin{table}[H]
+\centering
+\caption{Outils du VOC et justification}
+\small
+\begin{tabularx}{\textwidth}{L{2.8cm} L{2.8cm} X}
+\toprule
+\textbf{Couche} & \textbf{Outil} & \textbf{Justification} \\
+\midrule
+Conteneurisation & Docker + Compose    & Environnement reproductible, socket DooD pour k3d \\
+Cluster k8s      & k3d (k3s-in-Docker) & Léger ($<$1 nœud), démarrage rapide, multi-arch \\
+SCA conteneurs   & Grype               & EPSS+KEV intégré, aucun incident supply-chain connu \\
+DAST web         & Nuclei              & Léger, peu de faux positifs, Job k8s natif \\
+Injection SQL    & SQLMap              & Référence en détection SQLi automatisée \\
+XSS              & XSStrike            & Détection spécialisée Cross-Site Scripting \\
+Fuzzing chemins  & ffuf                & Rapide, wordlist personnalisable en ConfigMap \\
+Crawling         & Katana              & Découverte d'URLs pour alimenter les scanners \\
+Agrégation       & DefectDojo          & Déduplication, API REST, nombreux parsers \\
+Priorisation     & FastAPI (custom)    & CVSS + EPSS + KEV $\times$ contexte métier \\
+Orchestration    & n8n                 & Workflows visuels, cron, webhooks \\
+Gestion de cas   & TheHive             & Suivi d'incidents de sécurité \\
+SIEM (opt.)      & Wazuh               & HIDS + moteur de règles \\
+Monitoring (opt.)& Grafana + Prometheus & Dashboards et métriques \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Scanners écartés}
+\begin{itemize}[nosep]
+    \item \textbf{Nessus~:} la version gratuite est limitée à 16 IPs, incompatible avec la contrainte open-source.
+    \item \textbf{Burp Suite Community~:} pas de capacité d'automatisation (pas d'API, usage manuel uniquement).
+    \item \textbf{OWASP ZAP~:} retenu initialement pour le scan DAST actif+passif, retiré à cause de sa consommation mémoire excessive sur un nœud k3d (contrainte 16~Go).
+    \item \textbf{Trivy~:} fonctionnellement similaire à Grype, écarté pour des considérations de sécurité de la chaîne logicielle.
+\end{itemize}
+
+
+% ============================================================
+\chapter{Environnement de Laboratoire}
+% ============================================================
+
+\section{Infrastructure Matérielle}
+Le laboratoire fonctionne sur une machine hôte Windows avec 16~Go de RAM. Cette contrainte mémoire est déterminante dans tous les choix d'outils~: OWASP ZAP a été écarté précisément à cause d'elle, et le monitoring (Grafana + Prometheus, $\approx$2~Go) ainsi que Wazuh ($\approx$1.5~Go) sont optionnels.
+
+Toute l'infrastructure tourne à l'intérieur d'un conteneur Docker «~toolbox~» qui embarque l'ensemble des outils de gestion~: kubectl, helm, k3d, Docker CLI, jq, yq, git et Python~3. Ce conteneur est construit à partir de \texttt{toolbox/Dockerfile} et monte le dépôt du projet à \texttt{/workspace}.
+
+\section{Namespace Kubernetes}
+Le cluster est organisé en namespaces isolés pour une séparation claire des responsabilités~:
+
+\begin{table}[H]
+\centering
+\caption{Namespaces Kubernetes du VOC}
+\small
+\begin{tabular}{l l p{8cm}}
+\toprule
+\textbf{Namespace} & \textbf{Composants} & \textbf{Rôle} \\
+\midrule
+\texttt{voc-core}   & DefectDojo, n8n, TheHive, service de priorisation & Services permanents du VOC \\
+\texttt{scanning}   & Jobs Katana, Grype, Nuclei, ffuf, SQLMap, XSStrike & Jobs éphémères (supprimés après chaque run) \\
+\texttt{targets}    & Juice Shop, DVWA & Applications cibles vulnérables \\
+\texttt{monitoring} & Grafana, Prometheus & Observabilité (optionnel, $\approx$2~Go RAM) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Cibles Vulnérables}
+Deux applications aux profils métier opposés servent de cibles~:
+
+\begin{table}[H]
+\centering
+\caption{Profil métier des cibles vulnérables}
+\small
+\begin{tabularx}{\textwidth}{L{2.5cm} L{2.2cm} c c L{2.8cm} X}
+\toprule
+\textbf{Cible} & \textbf{Image Docker} & \textbf{Criticité} & \textbf{Exposition} & \textbf{Données} & \textbf{Intérêt} \\
+\midrule
+Juice Shop & \texttt{bkimminich/juice-shop:v16.0.0} & 5/5 & Internet & Financières & Findings amplifiés ($\times$1.60) \\
+DVWA       & \texttt{vulnerables/web-dvwa:latest}    & 2/5 & Interne  & Internes    & Findings atténués ($\times$0.79) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Ce choix permet de démontrer l'effet du contexte~: une même vulnérabilité sera priorisée différemment selon la cible sur laquelle elle est détectée.
+
+\subsection{Juice Shop}
+OWASP Juice Shop est une application de commerce en ligne intentionnellement vulnérable, déployée ici dans le rôle d'un portail de paiement client exposé sur Internet. Elle contient des vulnérabilités de toutes les catégories OWASP Top 10. Elle est déployée via le manifeste \texttt{k8s/targets/juice-shop.yaml} avec les ressources~: 100--500m CPU, 128--512~Mi RAM.
+
+\subsection{DVWA (Damn Vulnerable Web Application)}
+DVWA est une application PHP/MySQL intentionnellement vulnérable, déployée ici dans le rôle d'une application RH interne accessible uniquement depuis le LAN. Elle est initialisée automatiquement au démarrage du pod via un hook \texttt{postStart} qui appelle \texttt{setup.php} pour créer la base de données. Elle est déployée via \texttt{k8s/targets/dvwa.yaml} avec les ressources~: 100--500m CPU, 256--768~Mi RAM.
+
+\section{Services Déployés}
+Les services suivants sont accessibles depuis le navigateur de l'hôte via port-forward~:
+
+\begin{table}[H]
+\centering
+\caption{Ports des services accessibles depuis l'hôte}
+\small
+\begin{tabular}{l l l l}
+\toprule
+\textbf{Service} & \textbf{URL hôte} & \textbf{Port pod} & \textbf{Namespace} \\
+\midrule
+DefectDojo     & \texttt{http://localhost:8080}  & 80   & voc-core \\
+n8n            & \texttt{http://localhost:5678}  & 5678 & voc-core \\
+Juice Shop     & \texttt{http://localhost:3000}  & 3000 & targets \\
+TheHive        & \texttt{http://localhost:9000}  & 9000 & voc-core \\
+Prio API       & \texttt{http://localhost:8000}  & 8000 & voc-core \\
+Grafana (opt.) & \texttt{http://localhost:3001}  & 3000 & monitoring \\
+Wazuh (opt.)   & \texttt{https://localhost:55000} & 55000 & voc-core \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% ============================================================
+\chapter{Dockerisation et Conteneurisation}
+% ============================================================
+
+La reproductibilité de l'environnement est un impératif du projet. Toute l'infrastructure VOC est encapsulée dans deux images Docker~: le \textbf{toolbox} (environnement de gestion) et le \textbf{service de priorisation} (microservice Python). Cette approche garantit qu'un autre ingénieur peut recréer l'environnement complet depuis n'importe quelle machine disposant de Docker Desktop.
+
+\section{Stratégie Docker-out-of-Docker (DooD)}
+Le toolbox n'embarque pas un daemon Docker complet (ce qui nécessiterait des privilèges \texttt{--privileged} dangereux). Il monte le socket Docker de l'hôte~:
+
+\begin{lstlisting}[language=yaml, caption={Montage du socket Docker dans docker-compose.yml}, label={lst:docker_socket}]
+volumes:
+  - .:/workspace
+  - /var/run/docker.sock:/var/run/docker.sock
+\end{lstlisting}
+
+Ainsi, les commandes \texttt{docker} et \texttt{k3d} exécutées \emph{dans} le toolbox créent des conteneurs directement sur l'hôte. Les nœuds k3d (eux-mêmes des conteneurs Docker) sont ainsi accessibles depuis le toolbox via le réseau Docker partagé.
+
+\section{Image Toolbox (\texttt{toolbox/Dockerfile})}
+
+\subsection{Base et outils système}
+L'image est construite sur \texttt{debian:bookworm-slim} pour minimiser la surface d'attaque. L'argument \texttt{TARGETARCH} est fourni automatiquement par BuildKit pour assurer la compatibilité amd64/arm64~:
+
+\begin{lstlisting}[language=Dockerfile, caption={En-tête du Dockerfile toolbox}, label={lst:toolbox_header}]
+FROM debian:bookworm-slim
+
+ARG TARGETARCH
+ARG KUBECTL_VERSION=v1.31.0
+ARG K3D_VERSION=v5.7.5
+ARG DOCKER_VERSION=27.3.1
+ARG HELM_VERSION=v3.16.1
+ARG YQ_VERSION=v4.44.5
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    KUBECONFIG=/workspace/.kube/config \
+    PATH="/usr/local/bin:${PATH}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash bash-completion curl wget git openssh-client \
+      jq python3 python3-pip python3-venv vim nano less \
+      ca-certificates gnupg \
+    && rm -rf /var/lib/apt/lists/*
+\end{lstlisting}
+
+\subsection{Outils de gestion Kubernetes}
+Quatre binaires sont téléchargés en fonction de l'architecture cible~:
+
+\begin{lstlisting}[language=Dockerfile, caption={Installation kubectl, helm, k3d, yq}, label={lst:toolbox_tools}]
+# kubectl
+RUN curl -fsSLo /usr/local/bin/kubectl \
+      "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+    && chmod +x /usr/local/bin/kubectl
+
+# helm
+RUN curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" \
+    | tar -xz -C /tmp && mv /tmp/linux-${TARGETARCH}/helm /usr/local/bin/helm
+
+# k3d
+RUN curl -fsSL \
+      "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-${TARGETARCH}" \
+      -o /usr/local/bin/k3d && chmod +x /usr/local/bin/k3d
+
+# yq (mikefarah/yq -- Go-based)
+RUN curl -fsSL \
+      "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH}" \
+      -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
+\end{lstlisting}
+
+\textbf{Note multi-arch~:} Docker CLI utilise une convention de nommage différente (\texttt{x86\_64}/\texttt{aarch64}) au lieu de \texttt{amd64}/\texttt{arm64}. Un test conditionnel corrige ce décalage lors de l'installation.
+
+\subsection{Scripts embarqués}
+Le Dockerfile copie deux scripts dans l'image~:
+
+\begin{lstlisting}[language=Dockerfile, caption={Copie des scripts VOC}, label={lst:toolbox_scripts}]
+COPY entrypoint.sh /opt/voc/entrypoint.sh
+COPY profile.sh    /opt/voc/profile.sh
+RUN chmod +x /opt/voc/entrypoint.sh /opt/voc/profile.sh
+
+WORKDIR /workspace
+ENTRYPOINT ["/opt/voc/entrypoint.sh"]
+CMD ["bash"]
+\end{lstlisting}
+
+\begin{itemize}[nosep]
+    \item \texttt{entrypoint.sh}~: charge le fichier \texttt{.env}, source \texttt{profile.sh}, affiche le banner d'accueil, vérifie le socket Docker et le kubeconfig.
+    \item \texttt{profile.sh}~: définit les 11 commandes VOC (\texttt{voc-scan}, \texttt{voc-prio}, \texttt{voc-status}\ldots), les fonctions de déploiement et le cache d'état.
+\end{itemize}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/docker_images.png.png}
+        \caption{Images Docker du VOC après construction}
+    \label{fig:docker_images}
+\end{figure}
+
+\section{Configuration Docker Compose (\texttt{docker-compose.yml})}
+Docker Compose est le point d'entrée unique pour lancer l'environnement VOC complet~:
+
+\begin{lstlisting}[language=yaml, caption={Service voc dans docker-compose.yml}, label={lst:docker_compose}]
+services:
+  voc:
+    build:
+      context: ./toolbox
+      dockerfile: Dockerfile
+    image: voc-toolbox:latest
+    container_name: voc
+    ports:
+      - "8080:8080"   # DefectDojo
+      - "5678:5678"   # n8n
+      - "3000:3000"   # Juice Shop
+      - "9000:9000"   # TheHive
+      - "3001:3001"   # Grafana (VOC_ENABLE_MONITORING=1)
+      - "55000:55000" # Wazuh API (VOC_ENABLE_WAZUH=1)
+    volumes:
+      - .:/workspace                              # depot monte en live
+      - /var/run/docker.sock:/var/run/docker.sock # Docker-out-of-Docker
+      - voc-k3d:/root/.k3d                        # config cluster
+      - voc-helm:/root/.cache/helm                # cache charts Helm
+      - voc-helm-config:/root/.config/helm
+    environment:
+      VOC_ENABLE_MONITORING: "${VOC_ENABLE_MONITORING:-0}"
+      VOC_ENABLE_WAZUH:      "${VOC_ENABLE_WAZUH:-0}"
+      VOC_SCAN_ON_START:     "${VOC_SCAN_ON_START:-auto}"
+      VOC_FORCE_DEPLOY:      "${VOC_FORCE_DEPLOY:-0}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # compat Linux
+\end{lstlisting}
+
+\textbf{Points clés~:}
+\begin{itemize}[nosep]
+    \item \textbf{Volumes nommés~:} \texttt{voc-k3d} préserve la configuration k3d entre redémarrages~; \texttt{voc-helm} évite le re-téléchargement des index de charts.
+    \item \textbf{Feature switches~:} les quatre variables d'environnement permettent d'activer/désactiver des composants optionnels sans modifier le fichier Compose.
+    \item \textbf{\texttt{extra\_hosts}~:} la directive \texttt{host-gateway} assure la résolution de \texttt{host.docker.internal} sur Linux (natif sur macOS/Windows).
+\end{itemize}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/docker_compose_ps.png}
+        \caption{État du conteneur toolbox après démarrage via Docker Compose}
+    \label{fig:docker_compose_ps}
+\end{figure}
+
+\section{Image du Service de Priorisation (\texttt{prioritization-service/Dockerfile})}
+Le service de priorisation est une application FastAPI empaquetée dans une image minimale~:
+
+\begin{lstlisting}[language=Dockerfile, caption={Dockerfile du service de priorisation}, label={lst:prio_dockerfile}]
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+\end{lstlisting}
+
+Les dépendances Python sont~:
+
+\begin{lstlisting}[caption={requirements.txt du service de priorisation}, label={lst:requirements}]
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.32
+httpx>=0.27,<0.29
+pydantic>=2.9
+pydantic-settings>=2.5
+PyYAML>=6.0
+\end{lstlisting}
+
+\subsection{Import de l'image dans k3d}
+Contrairement aux images publiques (Juice Shop, DVWA) qui sont téléchargées directement par les nœuds k3d, l'image du service de priorisation est construite localement. Elle doit être importée explicitement dans le registre interne de k3d~:
+
+\begin{lstlisting}[caption={Import de l'image locale dans k3d}, label={lst:k3d_import}]
+# Construire l'image
+docker build -t prioritization-service:0.1.0 ./prioritization-service
+
+# L'importer dans tous les noeuds du cluster "voc"
+k3d image import prioritization-service:0.1.0 -c voc
+\end{lstlisting}
+
+La politique \texttt{imagePullPolicy: Never} dans le \texttt{deployment.yaml} garantit que kubelet utilise exclusivement l'image importée localement et ne tente pas de la télécharger depuis un registry.
+
+\section{Banner du Toolbox}
+Au démarrage du conteneur, \texttt{entrypoint.sh} affiche un banner récapitulatif des commandes disponibles~:
+
+\begin{lstlisting}[caption={Banner VOC Dev Toolbox (entrypoint.sh)}, label={lst:banner}]
+╔══════════════════════════════════════════════════════════╗
+║                  VOC Dev Toolbox                         ║
+╠══════════════════════════════════════════════════════════╣
+║  voc-up         Create k3d cluster + namespaces          ║
+║  voc-status     Show cluster status                      ║
+║  voc-deploy     Deploy components (dd/n8n/thehive/prio..)║
+║  voc-scan       Run scan pipeline (Grype+Nuclei+DAST)    ║
+║  voc-prio       Re-prioritize findings                   ║
+║  voc-assets     Show the asset inventory                 ║
+║  voc-help       Show all commands                        ║
+╚══════════════════════════════════════════════════════════╝
+[VOC] Docker socket: OK
+[VOC] Kubeconfig: found at /workspace/.kube/config
+\end{lstlisting}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/toolbox_banner.png}
+        \caption{Banner d'accueil du conteneur toolbox VOC}
+    \label{fig:toolbox_banner}
+\end{figure}
+
+
+% ============================================================
+\chapter{Déploiement de l'Infrastructure Kubernetes}
+% ============================================================
+
+\section{Création du Cluster k3d (\texttt{scripts/k3d-up.sh})}
+k3d (k3s-in-Docker) crée un cluster Kubernetes léger en utilisant des conteneurs Docker comme nœuds. Le script \texttt{k3d-up.sh} automatise les étapes de création~:
+
+\subsection{Réseau Docker dédié}
+Un réseau Docker nommé \texttt{voc} est créé pour isoler les communications entre le toolbox et les nœuds k3d~:
+
+\begin{lstlisting}[language=bash, caption={Création du réseau Docker et du cluster k3d}, label={lst:k3d_create}]
+CLUSTER_NAME="voc"
+API_PORT="6550"
+
+# Creer le reseau Docker isole
+docker network inspect "$CLUSTER_NAME" > /dev/null 2>&1 \
+    || docker network create "$CLUSTER_NAME"
+
+# Creer le cluster k3d (1 server, 0 agent)
+k3d cluster create "$CLUSTER_NAME" \
+    --api-port "$API_PORT" \
+    --network "$CLUSTER_NAME" \
+    --agents 0 \
+    --k3s-arg "--disable=traefik@server:0" \
+    --k3s-arg "--disable=metrics-server@server:0" \
+    --wait --timeout 120s
+\end{lstlisting}
+
+Traefik et metrics-server sont désactivés car aucun composant VOC ne les utilise~: toute communication externe passe par \texttt{kubectl port-forward}. Cela économise environ 250~Mo de RAM.
+
+\subsection{Configuration du kubeconfig}
+k3d écrit l'URL de l'API server avec \texttt{0.0.0.0} ou \texttt{localhost}, ce qui est inaccessible depuis l'intérieur d'un autre conteneur. Le script corrige cette URL~:
+
+\begin{lstlisting}[language=bash, caption={Correction du kubeconfig pour l'accès depuis le toolbox}, label={lst:kubeconfig_fix}]
+# Ecrire le kubeconfig dans /workspace/.kube/config (accessible depuis l'hote)
+k3d kubeconfig merge "$CLUSTER_NAME" --output "$KUBE_DIR/config" --overwrite
+
+# Remplacer 0.0.0.0/localhost par host.docker.internal
+sed -i "s|server: https://0.0.0.0:${API_PORT}|\
+server: https://host.docker.internal:${API_PORT}|g" "$KUBE_DIR/config"
+
+# Desactiver la verification TLS (SAN ne correspond plus apres rewrite)
+kubectl config set-cluster "k3d-$CLUSTER_NAME" --insecure-skip-tls-verify=true
+\end{lstlisting}
+
+\subsection{Création des namespaces}
+Les quatre namespaces sont créés en appliquant le manifeste \texttt{k8s/namespaces/namespaces.yaml}~:
+
+\begin{lstlisting}[language=bash, caption={Application des namespaces}, label={lst:namespaces}]
+kubectl apply -f /workspace/k8s/namespaces/namespaces.yaml
+# Cree : voc-core, scanning, targets, monitoring
+\end{lstlisting}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/k3s_nodes.png}
+        \caption{État du nœud du cluster k3d après création}
+    \label{fig:k3d_nodes}
+\end{figure}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/k3d_network.png}
+        \caption{Réseau Docker partagé entre le toolbox et les nœuds k3d}
+    \label{fig:k3d_network}
+\end{figure}
+
+\section{RBAC Kubernetes (\texttt{scanners/orchestrator-rbac.yaml})}
+Le Job orchestrateur qui crée et surveille les Jobs de scan a besoin de droits Kubernetes spécifiques. Un ServiceAccount dédié est créé dans le namespace \texttt{scanning} avec les permissions minimales nécessaires~:
+
+\begin{lstlisting}[language=yaml, caption={ServiceAccount et RBAC pour l'orchestrateur de scans}, label={lst:rbac}]
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scan-orchestrator
+  namespace: scanning
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scan-orchestrator
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create","get","list","watch","delete"]
+  - apiGroups: [""]
+    resources: ["pods","pods/log","configmaps"]
+    verbs: ["get","list","watch","create","delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scan-orchestrator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scan-orchestrator
+subjects:
+  - kind: ServiceAccount
+    name: scan-orchestrator
+    namespace: scanning
+\end{lstlisting}
+
+\section{Déploiement des Services (\texttt{scripts/run-all.sh})}
+Le script principal \texttt{run-all.sh} orchestre le déploiement complet du stack en appliquant une stratégie de \emph{warm start}~:
+
+\subsection{Cache d'état de déploiement}
+Chaque composant déployé est associé au hash de son fichier de values Helm. Lors d'un second démarrage, le script compare le hash actuel au hash stocké dans un ConfigMap Kubernetes (\texttt{voc-deploy-state})~: si les valeurs n'ont pas changé et que le release Helm est en état \texttt{deployed}, le déploiement est sauté. Un second \texttt{start.ps1} se termine donc typiquement en moins d'une minute au lieu de 10+.
+
+\subsection{Déploiements en parallèle}
+Les composants indépendants sont déployés en parallèle grâce à la fonction \texttt{spawn()}~:
+
+\begin{lstlisting}[language=bash, caption={Déploiement parallèle des composants}, label={lst:parallel_deploy}]
+# Lancer en parallele (les logs sont bufferises pour eviter l'entrelacement)
+spawn "DefectDojo"            deploy_defectdojo
+spawn "n8n"                   deploy_n8n
+spawn "TheHive"               deploy_thehive
+spawn "Prioritization Service" deploy_prioritization_service
+spawn "Targets"               deploy_targets
+
+# Attendre la completion de tous les spawns
+wait_all_spawns
+\end{lstlisting}
+
+\subsection{Attente de disponibilité}
+La fonction \texttt{wait\_ready()} remplace les boucles \texttt{sleep} manuelles~: elle poll \texttt{kubectl rollout status} avec un timeout configurable, ce qui minimise la latence d'attente.
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/k8s_pods_all.png}
+        \caption{État de tous les pods du cluster après déploiement complet}
+    \label{fig:k8s_pods_all}
+\end{figure}
+
+\section{Déploiement de DefectDojo}
+DefectDojo est déployé via Helm dans le namespace \texttt{voc-core} depuis le chart officiel. Il opère en tant que hub de vulnérabilités central exclusif. Ce choix architectural repose sur le fait que DefectDojo accepte nativement les formats de sortie disparates de tous nos outils de scan, permettant de consolider l'ensemble des findings en un seul point de vérité. Le mécanisme d'import fonctionne en deux temps~:
+\begin{enumerate}[nosep]
+    \item Tentative de \texttt{reimport-scan} (déduplique par rapport au test existant).
+    \item Fallback sur \texttt{import-scan} si aucun test n'existe (premier run).
+\end{enumerate}
+Un système de retry avec backoff exponentiel gère les erreurs 5xx transitoires pendant le démarrage.
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/defectdojo_dashboard.png}
+        \caption{Tableau de bord principal de DefectDojo après import des résultats}
+    \label{fig:defectdojo_dashboard}
+\end{figure}
+
+
+% ============================================================
+\chapter{Pipeline de Scan Complet}
+% ============================================================
+
+Le pipeline complet est orchestré par le script \texttt{scripts/scan-all.sh} (988 lignes) et s'exécute en environ 10--12 minutes (mode complet) ou 6 minutes (mode \texttt{--quick}).
+
+\section{Étape 1~: Vérification des Prérequis}
+Le script vérifie la connectivité à l'API DefectDojo (6 tentatives avec 5~s d'intervalle) et l'état des pods cibles (\texttt{juice-shop} et \texttt{dvwa} en phase \texttt{Running}). Cette vérification est nécessaire car les port-forwards peuvent mettre quelques secondes à se stabiliser après un redémarrage.
+
+\section{Étape 2~: Découverte avec Katana}
+Le crawler Katana parcourt chaque cible et produit deux fichiers par cible~:
+\begin{itemize}[nosep]
+    \item \texttt{all\_urls.txt}~: toutes les URLs découvertes (consommé par Nuclei).
+    \item \texttt{param\_urls.txt}~: URLs contenant des paramètres \texttt{?key=value} (consommé par SQLMap et XSStrike).
+\end{itemize}
+
+\subsection{Seed URLs}
+Le crawl statique de Katana ne peut pas atteindre les routes SPA, les endpoints REST ni les pages derrière authentification. Des fichiers de seed URLs manuels complètent les résultats~:
+
+\begin{lstlisting}[caption={Extrait de seed-params.juice-shop.txt}, label={lst:seed_params}]
+http://juice-shop.targets.svc.cluster.local:3000/rest/user/login
+http://juice-shop.targets.svc.cluster.local:3000/rest/products/search?q=
+http://juice-shop.targets.svc.cluster.local:3000/api/Feedbacks/
+http://juice-shop.targets.svc.cluster.local:3000/profile?edit=true
+\end{lstlisting}
+
+Les fichiers finaux sont empaquetés dans un ConfigMap Kubernetes par cible (ex~: \texttt{juice-shop-urls-cm}), monté par les scanners des étapes suivantes. Cette approche évite de retransmettre les listes d'URLs à chaque pod de scan.
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/katana_crawl.png}
+        \caption{Découverte d'URLs par Katana sur la cible Juice Shop}
+    \label{fig:katana_crawl}
+\end{figure}
+
+\section{Étape 3~: Scan SCA avec Grype}
+Grype scanne les images Docker des cibles (\texttt{bkimminich/juice-shop:v16.0.0} et \texttt{vulnerables/web-dvwa:latest}).
+
+\subsection{Cache de la base de vulnérabilités}
+La base de vulnérabilités Grype ($\approx$200~Mo) est mise en cache dans un PersistentVolumeClaim (\texttt{grype-db-cache}) pour éviter le re-téléchargement à chaque run. Le cache est versionné~: un Job préalable (\texttt{grype-db-warm}) vérifie l'âge du cache et le rafraîchit uniquement s'il a plus de 24 heures.
+
+\begin{lstlisting}[language=yaml, caption={PersistentVolumeClaim pour le cache Grype}, label={lst:grype_pvc}]
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grype-db-cache
+  namespace: scanning
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path   # provisioner k3d
+  resources:
+    requests:
+      storage: 500Mi
+\end{lstlisting}
+
+\subsection{Scans en parallèle}
+Les scans sont lancés en parallèle~: un Job Kubernetes par image, chacun montant le PVC en lecture seule après le warm-up synchrone (évite la corruption de cache concurrente).
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/grype_findings_juice.png}
+    \par\vspace{0.5cm}
+    \par\vspace{0.2cm}
+\includegraphics[width=\textwidth]{images/grype_findings_dvwa.png}
+        \caption{Vulnérabilités SCA détectées par Grype dans DefectDojo}
+    \label{fig:grype_findings}
+\end{figure}
+
+\section{Étape 3b~: Authentification aux Cibles}
+Les endpoints intéressants de DVWA (injections, XSS) sont protégés par un login. Le Job dédié \texttt{dvwa-auth-job.yaml} réalise~:
+\begin{enumerate}[nosep]
+    \item La création automatique de la base de données DVWA via une requête POST sur \texttt{/setup.php}.
+    \item L'authentification HTTP (login \texttt{admin} / mot de passe \texttt{password}).
+    \item L'extraction du cookie \texttt{PHPSESSID} depuis les headers de réponse \texttt{Set-Cookie}.
+    \item L'écriture du cookie dans un Secret Kubernetes (\texttt{dvwa-session}).
+\end{enumerate}
+
+\begin{lstlisting}[language=bash, caption={Extraction du cookie de session DVWA}, label={lst:dvwa_auth}]
+# Authentification et extraction du cookie
+COOKIE=$(curl -s -c /tmp/cookies.txt \
+    --data "username=admin&password=password&Login=Login" \
+    http://dvwa.targets.svc.cluster.local/login.php \
+    | grep -o "PHPSESSID=[^;]*" | head -1)
+
+# Stocker dans un Secret Kubernetes pour les scanners
+kubectl -n scanning create secret generic dvwa-session \
+    --from-literal=PHPSESSID="$COOKIE" --dry-run=client -o yaml \
+    | kubectl apply -f -
+\end{lstlisting}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/dvwa_auth_job.png}
+        \caption{Extraction automatique du cookie de session DVWA}
+    \label{fig:dvwa_auth_job}
+\end{figure}
+
+\section{Étape 4~: Scan DAST avec Nuclei}
+Nuclei est exécuté sur les URLs de \texttt{all\_urls.txt} avec les templates communautaires. Les Jobs sont soumis immédiatement~; la récupération des résultats (\emph{harvest}) tourne en arrière-plan pour ne pas bloquer l'étape suivante. Pour les cibles authentifiées, le cookie extrait à l'étape 3b est injecté via l'option \texttt{-H "Cookie: PHPSESSID=..."}.
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/nuclei_findings_juice.png}
+    \par\vspace{0.5cm}
+    \par\vspace{0.2cm}
+\includegraphics[width=\textwidth]{images/nuclei_findings_dvwa.png}
+        \caption{Findings DAST détectés par Nuclei dans DefectDojo}
+    \label{fig:nuclei_findings}
+\end{figure}
+
+\section{Étape 5~: ffuf, SQLMap et XSStrike}
+Les trois scanners sont lancés en parallèle pour chaque cible~:
+\begin{itemize}[nosep]
+    \item \textbf{SQLMap~:} teste chaque URL de \texttt{param\_urls.txt}. Détecte le type d'injection (boolean-based, time-based, UNION) et identifie le SGBD. La liste des cibles désactivées pour le DAST (\texttt{DAST\_DISABLED\_TARGETS}) permet d'exclure des cibles sans authentification valide.
+    \item \textbf{ffuf~:} fuzze les répertoires et fichiers cachés à partir d'une wordlist stockée en ConfigMap (\texttt{ffuf-wordlist-cm}). Seuls les codes HTTP 200, 201, 204, 301--308, 401, 403 sont retenus (\texttt{FFUF\_INTERESTING\_STATUS}).
+    \item \textbf{XSStrike~:} analyse les paramètres des URLs pour des vulnérabilités XSS réfléchies et persistantes. Le cookie de session DVWA est injecté pour accéder aux pages authentifiées.
+\end{itemize}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/sqlmap_detection.png}
+        \caption{Injection SQL détectée par SQLMap sur DVWA}
+    \label{fig:sqlmap_detection}
+\end{figure}
+
+% -------------------------------------------------------
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/scan_pipeline_terminal_1.png}
+    \caption{Exécution du pipeline de scan complet (partie 1/6)}
+    \label{fig:scan_pipeline_1}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/scan_pipeline_terminal_2.png}
+    \caption{Exécution du pipeline de scan complet (partie 2/6)}
+    \label{fig:scan_pipeline_2}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/scan_pipeline_terminal_3.png}
+    \caption{Exécution du pipeline de scan complet (partie 3/6)}
+    \label{fig:scan_pipeline_3}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/scan_pipeline_terminal_4.png}
+    \caption{Exécution du pipeline de scan complet (partie 4/6)}
+    \label{fig:scan_pipeline_4}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/scan_pipeline_terminal_5.png}
+    \caption{Exécution du pipeline de scan complet (partie 5/6)}
+    \label{fig:scan_pipeline_5}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/scan_pipeline_terminal_6.png}
+    \caption{Exécution du pipeline de scan complet (partie 6/6)}
+    \label{fig:scan_pipeline_6}
+\end{figure}
+
+
+% ============================================================
+\chapter{Normalisation et Import des Résultats}
+% ============================================================
+
+Chaque scanner produit sa sortie dans un format différent (JSON structuré, logs texte, JSONL). Le script \texttt{scripts/normalize-findings.py} (492 lignes) convertit toutes ces sorties en un format JSON unique compatible avec le parser \emph{Generic Findings Import} de DefectDojo.
+
+\section{Format de Sortie Unifié}
+Chaque finding normalisé contient les champs suivants~:
+
+\begin{lstlisting}[caption={Structure d'un finding normalisé (Generic Findings Import)}, label={lst:finding_struct}]
+{
+  "title": "SQL Injection in parameter 'id'",
+  "severity": "High",
+  "description": "GET parameter 'id' is vulnerable...",
+  "impact": "Full database read/write access",
+  "mitigation": "Use parameterized queries (PreparedStatement)",
+  "references": "https://owasp.org/www-community/attacks/SQL_Injection",
+  "date": "2025-07-31",
+  "endpoints": [{"host": "dvwa.targets.svc.cluster.local", "path": "/vulnerabilities/sqli/"}],
+  "tags": ["sqlmap", "dvwa", "priority-70"],
+  "unique_id_from_tool": "sqlmap::dvwa::id::union"
+}
+\end{lstlisting}
+
+Le champ \texttt{unique\_id\_from\_tool} permet la déduplication entre runs~: DefectDojo (\texttt{reimport-scan}) ne crée pas un nouveau finding si l'identifiant existe déjà.
+
+\section{Spécificités par Scanner}
+
+\subsection{Grype}
+Grype produit un JSON structuré avec les champs CVE, CVSS, package affecté et version corrigée. La normalisation est directe~: un CVE = un finding.
+
+\subsection{SQLMap}
+SQLMap produit des logs texte. Le script applique des regex pour extraire les informations clés~:
+
+\begin{lstlisting}[language=python, caption={Regex d'extraction SQLMap dans normalize-findings.py}, label={lst:sqlmap_regex}]
+SQLMAP_INJ_LINE = re.compile(
+    r"(?P<method>GET|POST)\s+parameter\s+'(?P<param>[^']+)'\s+"
+    r"(?:is vulnerable|appears to be '?(?P<technique>[^'\"]+?)'?\s+injectable)",
+    re.IGNORECASE,
+)
+SQLMAP_DBMS_LINE = re.compile(
+    r"back-end DBMS(?:\s+is)?[:=]?\s*(?P<dbms>.+)", re.IGNORECASE
+)
+\end{lstlisting}
+
+\subsection{ffuf}
+ffuf produit un JSON avec les codes HTTP et les réponses. Le script filtre selon \texttt{FFUF\_INTERESTING\_STATUS} \{200, 201, 301--308, 401, 403\} et applique un bump de sévérité pour les chemins sensibles~:
+
+\begin{lstlisting}[language=python, caption={Heuristique de sévérité ffuf}, label={lst:ffuf_heuristic}]
+SENSITIVE_PATH_HINTS = {"admin", "login", "dashboard", "config",
+                        "internal", "private"}
+# Si le chemin contient un mot sensible -> severity += 1 niveau
+\end{lstlisting}
+
+\subsection{XSStrike}
+XSStrike produit des logs texte. Le script extrait le payload XSS injecté et le contexte d'injection (paramètre, URL, type réfléchi/stocké).
+
+\section{Persistance des Résultats (\texttt{scripts/voc-db.py})}
+Les compteurs par scanner et par cible sont enregistrés dans une base SQLite locale (\texttt{scanners/voc-scans.db}) après chaque run. Le module \texttt{voc-db.py} gère~:
+\begin{itemize}[nosep]
+    \item L'insertion des métadonnées de chaque run (timestamp, durée, compteurs).
+    \item La purge automatique des runs de plus de 7 cycles (conservation de l'historique récent).
+    \item L'exposition de ces données via la commande \texttt{voc-history}.
+\end{itemize}
+
+Un ConfigMap Kubernetes \texttt{voc-scan-status} est également mis à jour après chaque run pour alimenter les dashboards Grafana sans dépendance réseau à la base SQLite.
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/defectdojo_findings_list.png}
+        \caption{Liste des findings dans DefectDojo avec tags de priorisation}
+    \label{fig:defectdojo_findings_list}
+\end{figure}
+
+\section{Métriques Prometheus (\texttt{voc-metrics-exporter.py})}
+Un exporteur Python dédié (\texttt{scripts/voc-metrics-exporter.py}) interroge périodiquement l'API DefectDojo et le service de priorisation pour exposer les métriques au format Prometheus~:
+
+\begin{lstlisting}[caption={Métriques exportées vers Prometheus}, label={lst:prometheus_metrics}]
+voc_findings_total{severity="critical", scanner="grype", target="juice-shop"} 3
+voc_findings_total{severity="high",     scanner="nuclei", target="dvwa"}       12
+voc_prioritized_total{band="critical"} 8
+voc_scan_duration_seconds{pipeline="full"} 612
+voc_last_scan_timestamp 1722384000
+\end{lstlisting}
+
+
+% ============================================================
+\chapter{Modèle de Priorisation}
+% ============================================================
+
+Ce chapitre décrit le cœur du projet~: le modèle qui transforme une liste plate de vulnérabilités classées par CVSS en une liste ordonnée par risque réel. Le code source est dans \texttt{prioritization-service/scoring.py}.
+
+\section{Philosophie du Modèle}
+Comme documenté dans le docstring de \texttt{scoring.py}~:
+
+\begin{lstlisting}[language=python, caption={Docstring de scoring.py — philosophie du modèle}, label={lst:scoring_philosophy}]
+"""
+priority = base(technical, threat) x context(asset)
+
+  technical  How broken is it?    CVSS 0-10, or the scanner severity word
+  threat     Is anyone using it?  EPSS probability + percentile, CISA KEV
+  context    Does it matter here? Internet exposure, criticality, data class
+
+base is a weighted blend on 0..100.
+context is a multiplier in [0.5, 1.6] -- below 1.0 damps a finding on a
+throwaway box, above 1.0 amplifies one on a crown jewel. Wide enough to
+reorder findings ACROSS severity bands -- that is the entire product.
+
+Worked example:
+  MEDIUM (CVSS 5.5) on juice-shop (internet, crit 5/5, financial)
+      base 52 x 1.60 -> 84 CRITICAL
+  HIGH (CVSS 8.0) on dvwa (internal, crit 1/5, internal)
+      base 65 x 0.79 -> 51 MEDIUM
+"""
+\end{lstlisting}
+
+\section{Formule}
+Le score de priorité (0--100) combine trois facteurs~:
+
+\begin{equation}
+\text{priorité} = \underbrace{\text{base}(\text{technique}, \text{menace})}_{\text{0..100}} \times \underbrace{\text{contexte}(\text{actif})}_{\text{0.5..1.6}}
+\label{eq:priority}
+\end{equation}
+
+Le score \texttt{base} est une moyenne pondérée du facteur technique et du facteur menace~:
+
+\begin{equation}
+\text{base} = 100 \times \frac{w_{\text{cvss}} \times \text{technique} + w_{\text{epss}} \times \text{menace}}{w_{\text{cvss}} + w_{\text{epss}}}
+\label{eq:base}
+\end{equation}
+
+avec $w_{\text{cvss}} = 0.5$ et $w_{\text{epss}} = 0.5$ par défaut (configurables dans le ConfigMap \texttt{prioritization-config}).
+
+\section{Facteur Technique}
+Score CVSS v3 (ou v2) normalisé sur $[0, 1]$. La majorité des findings DAST (Nuclei, ffuf, SQLMap, XSStrike) n'ont pas de CVSS~: le mot de sévérité du scanner est converti via la table de fallback \texttt{SEVERITY\_TO\_CVSS} dans \texttt{scoring.py}~:
+
+\begin{lstlisting}[language=python, caption={Table de fallback sévérité → CVSS (scoring.py)}, label={lst:severity_cvss}]
+SEVERITY_TO_CVSS: dict[str, float] = {
+    "critical":      9.5,
+    "high":          7.5,
+    "medium":        5.0,
+    "low":           3.0,
+    "info":          1.0,
+    "informational": 1.0,
+    "none":          0.0,
+}
+\end{lstlisting}
+
+Sans ce mécanisme, tous les findings web auraient un score technique de 0 et seraient exclus de la priorisation.
+
+\begin{table}[H]
+\centering
+\caption{Conversion sévérité $\rightarrow$ CVSS de substitution}
+\small
+\begin{tabular}{l c c}
+\toprule
+\textbf{Sévérité scanner} & \textbf{CVSS substitut} & \textbf{Facteur technique} \\
+\midrule
+Critical & 9.5 & 0.95 \\
+High     & 7.5 & 0.75 \\
+Medium   & 5.0 & 0.50 \\
+Low      & 3.0 & 0.30 \\
+Info     & 1.0 & 0.10 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Facteur Menace}
+Le facteur menace (0..1) est calculé par deux sources de threat intelligence~:
+
+\subsection{EPSS (\texttt{epss\_client.py})}
+Le client EPSS interroge l'API \texttt{https://api.first.org/data/v1/epss} en batch pour récupérer la probabilité d'exploitation et le percentile. Les probabilités brutes EPSS sont très petites (médiane $\approx$ 0.0005), ce qui écraserait ce terme à zéro. Le modèle applique donc~:
+
+\begin{equation}
+\text{menace}_{\text{EPSS}} = \max\!\Big(\text{percentile},\; \sqrt{\text{probabilité}}\Big)
+\label{eq:epss}
+\end{equation}
+
+Exemples~: probabilité 1\% $\rightarrow$ 0.10~; probabilité 25\% $\rightarrow$ 0.50.
+
+\subsection{CISA KEV (\texttt{kev\_client.py})}
+Le client KEV télécharge périodiquement le catalogue CISA Known Exploited Vulnerabilities (\texttt{https://www.cisa.gov/sites/default/files/feeds/known\_exploited\_vulnerabilities.json}) et maintient un index en mémoire. Si le CVE figure dans ce catalogue~:
+\begin{itemize}[nosep]
+    \item Le facteur menace est fixé à 1.0 (certitude d'exploitation active).
+    \item Un plancher de priorité à 70 est appliqué~: le contexte peut augmenter le score, mais pas le descendre en dessous.
+\end{itemize}
+
+\subsection{Prior en l'absence de données}
+Si ni EPSS ni KEV ne sont disponibles (findings sans CVE, typiquement DAST), un prior de 0.25 est utilisé comme valeur de menace par défaut.
+
+\section{Facteur Contexte (\texttt{asset-inventory.yaml})}
+Le contexte métier est défini dans le fichier \texttt{asset-inventory.yaml}, déployé comme ConfigMap Kubernetes (\texttt{voc-asset-inventory}) et modifiable sans rebuild de l'image~:
+
+\begin{lstlisting}[language=yaml, caption={Extrait de asset-inventory.yaml}, label={lst:asset_inventory}]
+defaults:                     # applique si aucun actif n'est resolu
+  business_criticality: 3
+  exposure: internal
+  data_classification: internal
+
+assets:
+  - name: juice-shop
+    description: "Online banking front-end -- portail paiement public"
+    business_criticality: 5
+    exposure: internet
+    data_classification: financial
+    owner: "Payments Engineering"
+    aliases: [juice-shop, juiceshop, bkimminich/juice-shop]
+
+  - name: dvwa
+    description: "Internal HR self-service app -- LAN only"
+    business_criticality: 2
+    exposure: internal
+    data_classification: internal
+    owner: "HR IT"
+    aliases: [dvwa, web-dvwa, vulnerables/web-dvwa]
+\end{lstlisting}
+
+Trois dimensions sont pondérées~:
+
+\begin{table}[H]
+\centering
+\caption{Dimensions du contexte métier et pondérations}
+\small
+\begin{tabular}{l c p{8cm}}
+\toprule
+\textbf{Dimension} & \textbf{Poids} & \textbf{Valeurs et facteurs} \\
+\midrule
+Exposition     & 0.4 & internet (1.0), dmz (0.75), interne (0.45), isolé (0.15) \\
+Criticité      & 0.4 & 1 à 5, mappé linéairement sur 0.2..1.0 \\
+Classification & 0.2 & financial/phi (1.0), pii (0.85), confidential (0.70), internal (0.40), public (0.15) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Le multiplicateur de contexte~:
+\[
+\text{multiplicateur} = 0.5 + (1.6 - 0.5) \times \text{contexte\_composite}
+\]
+
+L'écart $[0.5, 1.6]$ est suffisant pour réordonner les findings \emph{entre} bandes de sévérité.
+
+\section{Résolution des Actifs}
+Le service résout automatiquement l'actif associé à chaque finding, par ordre de priorité~:
+\begin{enumerate}[nosep]
+    \item Tag explicite \texttt{voc-asset-<nom>} posé manuellement.
+    \item Tags du scanner (ex.~: \texttt{juice-shop}), posés automatiquement à l'import.
+    \item Hostname des endpoints du finding.
+    \item Recherche par sous-chaîne dans le titre/description (index trié par longueur décroissante~: le plus spécifique gagne).
+\end{enumerate}
+Si aucun actif n'est résolu, les valeurs \texttt{defaults} de l'inventaire s'appliquent.
+
+\section{Bandes de Priorité}
+\begin{table}[H]
+\centering
+\caption{Seuils des bandes de priorité}
+\small
+\begin{tabular}{l c}
+\toprule
+\textbf{Bande} & \textbf{Score minimum} \\
+\midrule
+Critical & 80 \\
+High     & 60 \\
+Medium   & 40 \\
+Low      & 20 \\
+Info     & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Exemple Concret}
+\begin{table}[H]
+\centering
+\caption{Réordonnement de deux findings par le contexte métier}
+\small
+\begin{tabularx}{\textwidth}{X c c c c c}
+\toprule
+\textbf{Finding} & \textbf{CVSS} & \textbf{Base} & \textbf{Mult.} & \textbf{Score} & \textbf{Bande} \\
+\midrule
+MEDIUM sur Juice Shop (internet, crit.\ 5/5, financial) & 5.5 & 52 & $\times$1.60 & 84 & CRITICAL \\
+HIGH sur DVWA (interne, crit.\ 1/5, internal) & 8.0 & 65 & $\times$0.79 & 51 & MEDIUM \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Sans le modèle de contexte, l'équipe aurait traité en priorité le HIGH sur DVWA (serveur RH interne) au lieu du MEDIUM sur le portail de paiement.
+
+\section{API du Service de Priorisation}
+\begin{table}[H]
+\centering
+\caption{Endpoints de l'API FastAPI du service de priorisation}
+\small
+\begin{tabular}{l l p{7.5cm}}
+\toprule
+\textbf{Méthode} & \textbf{Endpoint} & \textbf{Rôle} \\
+\midrule
+\texttt{POST} & \texttt{/score}          & Scorer tous les findings actifs (batch EPSS, déduplication) \\
+\texttt{GET}  & \texttt{/explain/\{id\}} & Détail complet du calcul pour un finding \\
+\texttt{GET}  & \texttt{/assets}         & Inventaire des actifs et facteurs dérivés \\
+\texttt{GET}  & \texttt{/model}          & Paramètres du modèle actuellement en vigueur \\
+\texttt{POST} & \texttt{/reload}         & Recharger l'inventaire sans redémarrer le pod \\
+\texttt{GET}  & \texttt{/state}          & Résultats de la dernière passe (scorés, ignorés, erreurs) \\
+\texttt{GET}  & \texttt{/healthz}        & Health check pour la readiness probe k8s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Le scoring est exécuté automatiquement toutes les heures (configurable via \texttt{SCORING\_INTERVAL\_SECONDS}). Chaque finding scoré reçoit un tag \texttt{priority-NN}, des tags de contexte (\texttt{voc-asset-*}, \texttt{voc-exposure-*}, \texttt{voc-crit-*}), une mise à jour du \texttt{risk\_score} dans DefectDojo, et un changement de sévérité si la bande de priorité diffère.
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/prio_service_swagger.png}
+        \caption{Documentation interactive de l'API du service de priorisation}
+    \label{fig:prio_swagger}
+\end{figure}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/prio_explain_output.png}
+        \caption{Explication détaillée du calcul de priorité via l'endpoint \texttt{/explain}}
+    \label{fig:prio_explain}
+\end{figure}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/prio_assets_output.png}
+        \caption{Inventaire des actifs avec leurs facteurs de contexte dérivés}
+    \label{fig:prio_assets}
+\end{figure}
+
+
+% ============================================================
+\chapter{Orchestration et Gestion des Incidents}
+% ============================================================
+
+\section{Workflows n8n}
+L'orchestrateur n8n est déployé dans \texttt{voc-core} et exécute un workflow consolidé (\texttt{voc-master-dashboard.json}) qui assure~:
+
+\begin{table}[H]
+\centering
+\caption{Fonctionnalités du workflow n8n}
+\small
+\begin{tabular}{l p{9cm}}
+\toprule
+\textbf{Fonctionnalité} & \textbf{Description} \\
+\midrule
+Scan triggers     & Cron nocturne (02h00) + webhooks \texttt{POST /webhook/voc/scan/full} et \texttt{/quick} \\
+Job orchestration & Crée le Job k8s orchestrateur, poll le statut jusqu'à complétion \\
+Routage priorité  & Interroge DefectDojo toutes les 5~min, branche selon le tag \texttt{priority-*} \\
+Dashboard API     & \texttt{GET /webhook/voc/dashboard}~: résumé findings par sévérité, scanner, cible \\
+Health checks     & Ping de tous les services toutes les 5~min \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -------------------------------------------------------
+% Requires in preamble: \usepackage{subcaption}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/n8n_workflow_health_check.png}
+    \caption{Health Check workflow}
+    \label{fig:n8n_workflow_health_check}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/n8n_workflow_scan.png}
+    \caption{pipeline Scan automation workflow}
+    \label{fig:n8n_workflow_scan}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/n8n_workflow_thehive_case.png}
+    \caption{TheHive Case creation workflow}
+    \label{fig:n8n_workflow_thehive_case}
+\end{figure}
+
+\section{TheHive --- Gestion des Cas}
+TheHive Community Edition reçoit les incidents créés par le workflow n8n. Les findings de priorité critique ou haute sont automatiquement convertis en cas TheHive, avec~:
+\begin{itemize}[nosep]
+    \item Le titre et la description du finding.
+    \item La sévérité recalculée par le modèle de priorisation.
+    \item Les tags de contexte (actif, exposition, criticité) posés par le service de priorisation.
+\end{itemize}
+
+% -------------------------------------------------------
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/thehive_case.png}
+    \caption{Liste des cas d'incident créés automatiquement dans TheHive}
+    \label{fig:thehive_case_list}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{images/thehive_case_details.png}
+    \caption{Détails d'un cas d'incident créé automatiquement dans TheHive}
+    \label{fig:thehive_case_details}
+\end{figure}
+
+\section{Notifications}
+Les alertes sont actuellement enregistrées dans l'historique d'exécution n8n. Le workflow est architecturé pour connecter facilement des canaux externes~: il suffit de remplacer les nœuds \texttt{Alert: Critical} par des nœuds HTTP Request pointant vers un webhook Slack, Microsoft Teams ou Discord.
+
+\section{Monitoring (Grafana + Prometheus)}
+Activable via \texttt{VOC\_ENABLE\_MONITORING=1} ($\approx$2~Go RAM). Alors que DefectDojo est dédié exclusivement à la gestion détaillée des vulnérabilités, Grafana assure la supervision globale du système. Il consolide en un point unique la santé des ressources applicatives et serveurs, ainsi que les métriques liées aux vulnérabilités. Le stack comprend~:
+\begin{itemize}[nosep]
+    \item \textbf{Prometheus~:} collecte des métriques systèmes et celles liées aux vulnérabilités via l'exporteur \texttt{voc-metrics-exporter.py}.
+    \item \textbf{Grafana~:} trois dashboards pré-configurés pour offrir une vue unifiée~: santé du VOC, ressources applicatives du cluster, et état des vulnérabilités (findings par sévérité, scanner, cible, historique des scans).
+\end{itemize}
+
+% -------------------------------------------------------
+
+
+% Then in your document:
+\FloatBarrier
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/grafana_dashboard_health.png}
+    \caption{Dashboard Grafana - Health Monitoring}
+    \label{fig:grafana_dashboard_health}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/grafana_dashboard_vuln.png}
+    \caption{Dashboard Grafana - Vulnerability Monitoring}
+    \label{fig:grafana_dashboard_vuln}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/grafana_dashboard_resources.png}
+    \caption{Dashboard Grafana - Resources Monitoring}
+    \label{fig:grafana_dashboard_resources}
+\end{figure}
+\FloatBarrier
+
+Wazuh (SIEM/HIDS) est activable séparément via \texttt{VOC\_ENABLE\_WAZUH=1} ($\approx$1.5~Go RAM). Son API alimente le pipeline existant pour corréler les événements système avec les vulnérabilités détectées.
+
+
+% ============================================================
+\chapter{Automatisation et Reproductibilité}
+% ============================================================
+
+\section{Déploiement en Un Clic}
+Prérequis~: Docker Desktop + Git. Depuis PowerShell~:
+
+\begin{lstlisting}[language=bash, caption={Lancement en un clic depuis PowerShell}, label={lst:start_ps1}]
+# Variables optionnelles avant lancement :
+$env:VOC_ENABLE_WAZUH = "1"       # Wazuh SIEM manager
+$env:VOC_ENABLE_MONITORING = "1"  # Grafana + Prometheus
+$env:VOC_SCAN_ON_START = "1"      # Toujours lancer les scans
+$env:VOC_FORCE_DEPLOY = "1"       # Ignorer le cache d'etat
+
+.\start.ps1
+\end{lstlisting}
+
+Le script \texttt{start.ps1}~:
+\begin{enumerate}[nosep]
+    \item Calcule le hash des fichiers du toolbox~; rebuild Docker uniquement si modifiés (économise $\approx$30s).
+    \item Nettoie les conteneurs résiduels (évite les conflits de ports).
+    \item Lance \texttt{docker compose run} qui exécute \texttt{run-all.sh} à l'intérieur du toolbox.
+    \item Après déploiement, ouvre un shell interactif avec toutes les commandes VOC disponibles.
+\end{enumerate}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    
+        \caption{Déploiement en un clic via \texttt{start.ps1}}
+    \label{fig:start_ps1}
+\end{figure}
+
+\section{Stratégie de Warm Start}
+Le système est conçu pour des redémarrages rapides. Chaque étape de déploiement est gardée par le hash de la configuration appliquée~: un second \texttt{start.ps1} saute les \texttt{helm upgrade} inchangés, les builds Docker, les imports d'images et le pipeline de scan. Typiquement moins d'une minute au lieu de 10+.
+
+Variables d'environnement de contrôle~:
+
+\begin{table}[H]
+\centering
+\caption{Switches de configuration au démarrage}
+\small
+\begin{tabular}{l p{9cm}}
+\toprule
+\textbf{Variable} & \textbf{Effet} \\
+\midrule
+\texttt{VOC\_SCAN\_ON\_START=1}    & Toujours lancer les scans au démarrage (\texttt{0} = jamais) \\
+\texttt{VOC\_FORCE\_DEPLOY=1}      & Ignorer le cache d'état, redéployer tout \\
+\texttt{VOC\_ENABLE\_WAZUH=1}      & Déployer le manager Wazuh \\
+\texttt{VOC\_ENABLE\_MONITORING=1} & Déployer Grafana + Prometheus \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Historique des Scans (\texttt{voc-history})}
+La base SQLite \texttt{scanners/voc-scans.db} conserve l'historique des 7 derniers runs. La commande \texttt{voc-history} affiche un tableau récapitulatif~:
+
+\begin{lstlisting}[caption={Exemple de sortie voc-history}, label={lst:voc_history}]
+Run ID  Timestamp            Duration  Grype  Nuclei  SQLi  ffuf  XSS  Total
+------  -------------------  --------  -----  ------  ----  ----  ---  -----
+007     2025-07-31 02:00:01  11m 23s   42     18      3     7     2    72
+006     2025-07-30 02:00:05  10m 58s   42     17      3     7     2    71
+005     2025-07-29 14:32:18  6m 04s    --     --      3     7     2    12
+        (quick mode -- Nuclei/XSS skipped)
+\end{lstlisting}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/voc_history.png}
+        \caption{Historique des scans via la base SQLite locale}
+    \label{fig:voc_history}
+\end{figure}
+
+\section{CLI Toolbox}
+À l'intérieur du conteneur toolbox, l'ensemble des commandes VOC est défini dans \texttt{profile.sh}~:
+
+\begin{table}[H]
+\centering
+\caption{Commandes VOC disponibles dans le toolbox}
+\small
+\begin{tabular}{l p{9cm}}
+\toprule
+\textbf{Commande} & \textbf{Description} \\
+\midrule
+\texttt{voc-scan}                 & Lancer le pipeline de scan complet \\
+\texttt{voc-scan --quick}         & Scan rapide (sans Nuclei ni XSStrike) \\
+\texttt{voc-prio}                 & Exécuter une passe de priorisation \\
+\texttt{voc-prio-explain <id>}    & Afficher le détail du calcul d'un finding \\
+\texttt{voc-assets}               & Afficher l'inventaire des actifs et leurs facteurs \\
+\texttt{voc-history}              & Historique des scans (SQLite) \\
+\texttt{voc-status}               & État du cluster et des services \\
+\texttt{voc-sync-keys}            & Synchroniser les clés API entre les pods \\
+\texttt{voc-deploy <composant>}   & Redéployer un composant spécifique \\
+\texttt{voc-refresh}              & Vider le cache d'état de déploiement \\
+\texttt{voc-help}                 & Liste complète des commandes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% ============================================================
+\chapter{Résultats et Analyse}
+% ============================================================
+
+\section{Findings Détectés}
+Le pipeline a produit des findings sur les deux cibles, couvrant plusieurs catégories~:
+\begin{itemize}[nosep]
+    \item \textbf{Grype (SCA)~:} CVE dans les dépendances des images Docker, avec CVSS et lien vers les versions corrigées.
+    \item \textbf{Nuclei (DAST)~:} failles web détectées via les templates communautaires (headers manquants, misconfigurations, vulnérabilités connues).
+    \item \textbf{SQLMap~:} injections SQL confirmées avec identification du type (boolean-based, UNION, time-based) et du SGBD.
+    \item \textbf{ffuf~:} fichiers et répertoires cachés (pages d'admin, fichiers de configuration, endpoints non documentés).
+    \item \textbf{XSStrike~:} vulnérabilités XSS réfléchies avec payload de preuve.
+\end{itemize}
+
+\subsection{Résultats Quantitatifs}
+
+% TODO: Remplacer les XX par les valeurs réelles obtenues via voc-history
+%       ou depuis le dashboard DefectDojo.
+\begin{table}[H]
+\centering
+\caption{Nombre de findings détectés par scanner et par cible}
+\small
+\begin{tabular}{l c c c}
+\toprule
+\textbf{Scanner} & \textbf{Juice Shop} & \textbf{DVWA} & \textbf{Total} \\
+\midrule
+Grype (SCA)    & 88 & 0 & 88 \\
+Nuclei (DAST)  & 0 & 0 & 0 \\
+ffuf (Fuzzing) & 1 & 1 & 2 \\
+SQLMap (SQLi)  & 1 & 0 & 1 \\
+XSStrike (XSS) & 1307 & 0 & 1307 \\
+\midrule
+\textbf{Total} & \textbf{1397} & \textbf{1} & \textbf{1398} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Durée du pipeline de scan}
+\small
+\begin{tabular}{l c}
+\toprule
+\textbf{Étape} & \textbf{Durée approximative} \\
+\midrule
+Warm-up DB Grype + Crawling (Katana) & $\approx$ 2 min \\
+SCA (Grype, 2 images en parallèle)   & $\approx$ 4 min \\
+DAST (Nuclei)                         & $\approx$ 2 min \\
+Fuzzing + SQLi + XSS (en parallèle)  & $\approx$ 5 min \\
+Normalisation + Import DefectDojo    & $\approx$ 5 min \\
+Passe de priorisation                & $\approx$ 5 min \\
+\midrule
+\textbf{Total (mode complet)} & $\approx$ 23 min \\
+\textbf{Total (mode quick)}   & $\approx$ 6 min \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/defectdojo_products.png}
+        \caption{Vue produit "Lab Targets" dans DefectDojo}
+    \label{fig:defectdojo_products}
+\end{figure}
+
+\section{Effet de la Priorisation}
+La priorisation a réordonné les findings de manière significative~:
+\begin{itemize}[nosep]
+    \item Des findings MEDIUM sur Juice Shop (portail de paiement, Internet) ont été reclassés CRITICAL grâce au multiplicateur $\times$1.60.
+    \item Des findings HIGH sur DVWA (application RH, interne) ont été rétrogradés en MEDIUM par le multiplicateur $\times$0.79.
+    \item Les findings associés à un CVE du catalogue CISA KEV ont été maintenus au-dessus du plancher de priorité 70, quel que soit le contexte.
+\end{itemize}
+
+\subsection{Distribution Avant/Après Priorisation}
+
+% TODO: Remplacer les XX par les valeurs réelles (GET /state sur le service de priorisation)
+\begin{table}[H]
+\centering
+\caption{Distribution des findings par bande --- avant et après priorisation}
+\small
+\begin{tabular}{l c c}
+\toprule
+\textbf{Bande} & \textbf{Avant (sévérité scanner)} & \textbf{Après (priorité contextuelle)} \\
+\midrule
+Critical & XX & XX \\
+High     & XX & XX \\
+Medium   & XX & XX \\
+Low      & XX & XX \\
+Info     & XX & XX \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -------------------------------------------------------
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/prioritization_before_after.png}
+        \caption{Réordonnement des findings par le modèle de priorisation contextuelle}
+    \label{fig:prioritization_effect}
+\end{figure}
+
+\section{Traçabilité}
+Chaque finding scoré conserve une explication complète accessible via \texttt{GET /explain/\{id\}}~:
+
+\begin{lstlisting}[caption={Exemple de sortie de l'endpoint /explain}, label={lst:explain}]
+{
+  "finding_id": 42,
+  "title": "SQL Injection - Parameter 'id'",
+  "technical": {"cvss": 5.5, "source": "severity-fallback", "factor": 0.55},
+  "threat": {"epss_probability": null, "epss_percentile": null,
+             "kev": false, "factor": 0.25, "source": "prior"},
+  "base_score": 40.0,
+  "asset": "juice-shop",
+  "context": {"exposure": "internet", "criticality": 5,
+              "data_classification": "financial",
+              "composite": 0.95, "multiplier": 1.545},
+  "priority_score": 61.8,
+  "priority_band": "High",
+  "explanation": "technical 5.5/10 + threat 0.25 (no EPSS data) = base 40;
+    asset juice-shop (crit 5/5, internet-exposed, financial data)
+    gives context 0.95 (x1.545) -> priority 62 [high]"
+}
+\end{lstlisting}
+
+Les tags écrits sur le finding (\texttt{voc-asset-juice-shop}, \texttt{voc-exposure-internet}, \texttt{voc-crit-5}, \texttt{priority-62}) rendent le contexte visible directement dans DefectDojo.
+
+
+% ============================================================
+\chapter{Difficultés Rencontrées et Solutions}
+% ============================================================
+
+\begin{table}[H]
+\centering
+\caption{Problèmes rencontrés et solutions apportées}
+\small
+\begin{tabularx}{\textwidth}{L{3.5cm} X X}
+\toprule
+\textbf{Problème} & \textbf{Impact} & \textbf{Solution} \\
+\midrule
+Contrainte mémoire (16~Go) & OWASP ZAP provoque des OOM sur le nœud k3d & ZAP retiré~; scanners restants exécutés en parallèle contrôlé \\
+\addlinespace
+Findings DAST sans CVSS & Nuclei, ffuf, SQLMap, XSStrike ne fournissent pas de CVSS~; score technique = 0 & Table de fallback \texttt{SEVERITY\_TO\_CVSS} dans \texttt{scoring.py} \\
+\addlinespace
+Authentification DVWA & Les pages vulnérables sont derrière un login~; scans non authentifiés = 0 findings & Job dédié \texttt{dvwa-auth-job.yaml} extrayant le cookie \texttt{PHPSESSID} \\
+\addlinespace
+Concurrence PVC Grype & Deux scans parallèles écrivent dans le même cache $\rightarrow$ corruption & Warm-up synchrone du cache avant lancement des scans individuels \\
+\addlinespace
+kubeconfig invalide depuis le toolbox & k3d écrit \texttt{0.0.0.0} comme URL API~; inaccessible depuis un conteneur & Réécriture \texttt{sed} de l'URL vers \texttt{host.docker.internal} + TLS skip \\
+\addlinespace
+Port-forwards fragiles & Tunnels k8s qui tombent après un timeout ou un sleep de la machine & Détection de perte et rétablissement automatique au redémarrage \\
+\addlinespace
+Image locale non trouvée par kubelet & \texttt{prioritization-service:0.1.0} absent du registry & \texttt{k3d image import} + \texttt{imagePullPolicy: Never} dans le déploiement \\
+\addlinespace
+Formats de sortie hétérogènes & Chaque scanner produit un format différent (JSON, logs texte, JSONL) & Script de normalisation unifié (\texttt{normalize-findings.py}) \\
+\addlinespace
+DVWA init non deterministe & \texttt{setup.php} peut échouer si appelé trop tôt & Hook \texttt{postStart} + délai \texttt{sleep 10} dans le manifest DVWA \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+% ============================================================
+\chapter{Conclusion}
+% ============================================================
+
+\section{Bilan}
+Le VOC déployé dans le cadre de ce projet est capable de~:
+\begin{itemize}[nosep]
+    \item Se déployer en un seul clic depuis Windows grâce à l'infrastructure Docker-Kubernetes conteneurisée.
+    \item Scanner automatiquement les cibles avec cinq outils complémentaires couvrant SCA, DAST, SQLi, XSS et fuzzing.
+    \item Centraliser et dédupliquer les résultats dans DefectDojo via un script de normalisation unifié.
+    \item Prioriser les findings selon un modèle à trois dimensions (technique, menace, contexte métier) qui réordonne les vulnérabilités en fonction de leur impact réel.
+    \item Router automatiquement les incidents critiques vers TheHive via n8n.
+    \item Monitorer l'état du système via Grafana et Prometheus.
+    \item Fonctionner dans un environnement contraint (16~Go de RAM) avec un déploiement reproductible.
+\end{itemize}
+
+\section{Apport Principal}
+Le modèle de priorisation démontre que le contexte métier change fondamentalement l'ordre de traitement des vulnérabilités. En pondérant l'exposition réseau, la criticité métier et la classification des données, le modèle permet de traiter en priorité les vulnérabilités qui présentent le risque réel le plus élevé --- pas simplement celles avec le plus gros score CVSS.
+
+La traçabilité complète (tags, explication par finding, API \texttt{/explain}) permet aux équipes de comprendre et de challenger les décisions du modèle, ce qui est essentiel pour l'adoption en environnement opérationnel.
+
+La reproductibilité par Docker garantit que l'environnement peut être recréé identiquement par n'importe quel membre de l'équipe ou dans un pipeline CI/CD.
+
+\section{Perspectives}
+\begin{itemize}[nosep]
+    \item Intégration d'un scanner réseau (OpenVAS/Greenbone) pour couvrir la couche infrastructure.
+    \item Découverte automatique des actifs par intégration avec une CMDB existante.
+    \item Métriques de remédiation (MTTR --- Mean Time To Remediate).
+    \item Facteurs temporels dans le modèle~: ancienneté du finding, tendance EPSS sur 30 jours.
+    \item Connexion des notifications aux canaux d'équipe (Slack, Microsoft Teams).
+    \item Scan authentifié généralisé à toutes les cibles.
+    \item Registry Docker interne au cluster pour éviter les \texttt{k3d image import} manuels.
+\end{itemize}
+
+
+% ============================================================
+\begin{thebibliography}{99}
+\addcontentsline{toc}{chapter}{Bibliographie}
+
+\bibitem{cvss} FIRST, \textit{Common Vulnerability Scoring System v3.1~: Document de Spécification}, Forum of Incident Response and Security Teams, 2019. \url{https://www.first.org/cvss/v3.1/specification-document}
+
+\bibitem{epss} Jacobs, J., Romanosky, S., Adjerid, I., Baker, W., \textit{Improving vulnerability remediation through better exploit prediction}, Journal of Cybersecurity, 2020. \url{https://www.first.org/epss/}
+
+\bibitem{kev} CISA, \textit{Known Exploited Vulnerabilities Catalog}, Cybersecurity and Infrastructure Security Agency, 2021--2026. \url{https://www.cisa.gov/known-exploited-vulnerabilities-catalog}
+
+\bibitem{defectdojo} DefectDojo, \textit{DefectDojo --- Open Source Application Security Management}, 2024. \url{https://www.defectdojo.com/}
+
+\bibitem{thehive} TheHive Project, \textit{TheHive --- Security Incident Response Platform}, 2024. \url{https://thehive-project.org/}
+
+\bibitem{n8n} n8n GmbH, \textit{n8n --- Workflow Automation Tool}, 2024. \url{https://n8n.io/}
+
+\bibitem{grype} Anchore, \textit{Grype --- A vulnerability scanner for container images and filesystems}, 2024. \url{https://github.com/anchore/grype}
+
+\bibitem{nuclei} ProjectDiscovery, \textit{Nuclei --- Fast and customizable vulnerability scanner}, 2024. \url{https://github.com/projectdiscovery/nuclei}
+
+\bibitem{sqlmap} Bernardo Damele A. G., Miroslav \v{S}tampar, \textit{sqlmap --- Automatic SQL injection and database takeover tool}, 2024. \url{https://sqlmap.org/}
+
+\bibitem{xsstrike} Somdev Sangwan, \textit{XSStrike --- Most advanced XSS scanner}, 2024. \url{https://github.com/s0md3v/XSStrike}
+
+\bibitem{ffuf} Joona Hoikkala, \textit{ffuf --- Fuzz Faster U Fool}, 2024. \url{https://github.com/ffuf/ffuf}
+
+\bibitem{katana} ProjectDiscovery, \textit{Katana --- A next-generation crawling and spidering framework}, 2024. \url{https://github.com/projectdiscovery/katana}
+
+\bibitem{k3d} Rancher, \textit{k3d --- Little helper to run k3s in Docker}, 2024. \url{https://k3d.io/}
+
+\bibitem{fastapi} Sebastián Ramírez, \textit{FastAPI --- Modern, fast web framework for building APIs}, 2024. \url{https://fastapi.tiangolo.com/}
+
+\bibitem{grafana} Grafana Labs, \textit{Grafana --- The open observability platform}, 2024. \url{https://grafana.com/}
+
+\bibitem{owasp} OWASP Foundation, \textit{OWASP Top Ten --- 2021}, 2021. \url{https://owasp.org/Top10/}
+
+\end{thebibliography}
+
+
+% ============================================================
+\appendix
+\chapter{Inventaire des Actifs Complet}
+\label{app:asset_inventory}
+
+Le fichier \texttt{asset-inventory.yaml} définit le contexte métier de chaque cible. Il est déployé comme ConfigMap Kubernetes et peut être modifié sans reconstruire le service de priorisation~:
+
+\begin{lstlisting}[language=bash, caption={Mise à jour de l'inventaire des actifs sans rebuild}, label={lst:asset_update}]
+# Appliquer une modification de l'inventaire
+kubectl -n voc-core create configmap voc-asset-inventory \
+    --from-file=asset-inventory.yaml=./prioritization-service/asset-inventory.yaml \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+# Recharger l'inventaire sans redemarrer le pod
+curl -s -X POST http://localhost:8000/reload
+\end{lstlisting}
+
+\begin{lstlisting}[language=yaml, caption={Inventaire complet des actifs (asset-inventory.yaml)}, label={lst:asset_full}]
+version: 1
+
+defaults:
+  name: unknown
+  description: "Unclassified asset -- not present in the inventory"
+  business_criticality: 3
+  exposure: internal
+  data_classification: internal
+  owner: "unassigned"
+
+assets:
+  - name: juice-shop
+    description: "Online banking front-end (simulated) -- portail paiement public"
+    business_criticality: 5
+    exposure: internet
+    data_classification: financial
+    owner: "Payments Engineering"
+    aliases:
+      - juice-shop
+      - juiceshop
+      - juice_shop
+      - bkimminich/juice-shop
+
+  - name: dvwa
+    description: "Internal HR self-service app -- LAN only, no internet route"
+    business_criticality: 2
+    exposure: internal
+    data_classification: internal
+    owner: "HR IT"
+    aliases:
+      - dvwa
+      - web-dvwa
+      - vulnerables/web-dvwa
+\end{lstlisting}
+
+\chapter{Structure Complète du Projet}
+\label{app:project_structure}
+
+\begin{lstlisting}[caption={Arborescence du dépôt VOC}, label={lst:project_tree}]
+voc/
+  start.ps1                     # Deploiement Windows (un clic)
+  start.sh                      # Deploiement Linux/Mac
+  docker-compose.yml            # Service toolbox + volumes
+  .env                          # Cles API et variables (non versionne)
+  toolbox/
+    Dockerfile                  # Image voc-toolbox (debian:bookworm-slim)
+    entrypoint.sh               # Banner + checks au demarrage
+    profile.sh                  # 11 commandes voc-* (CLI)
+  prioritization-service/
+    Dockerfile                  # Image service (python:3.12-slim)
+    main.py                     # API FastAPI (routes + scheduler)
+    scoring.py                  # Modele de priorisation
+    assets.py                   # Chargement et resolution des actifs
+    epss_client.py              # Client API FIRST.org EPSS
+    kev_client.py               # Client catalogue CISA KEV
+    defectdojo_client.py        # Client API DefectDojo
+    config.py                   # Settings Pydantic (depuis env/ConfigMap)
+    asset-inventory.yaml        # Inventaire des actifs (deploye en ConfigMap)
+    deployment.yaml             # Deployment + Service + ConfigMap k8s
+    requirements.txt
+  scripts/
+    run-all.sh                  # Orchestrateur principal (cluster + deploy + scan)
+    scan-all.sh                 # Pipeline de scan complet (988 lignes)
+    k3d-up.sh                   # Creation cluster k3d + namespaces
+    normalize-findings.py       # Normalisation multi-scanner -> DefectDojo
+    voc-db.py                   # Historique SQLite des scans
+    voc-metrics-exporter.py     # Exporteur metriques Prometheus
+    voc-history.sh              # CLI historique
+  scanners/
+    crawler-job.yaml            # Job Katana
+    grype-job.yaml              # Job Grype (scan image)
+    grype-db-pvc.yaml           # PVC cache base vuln Grype
+    grype-db-warm-job.yaml      # Job warm-up cache Grype
+    nuclei-job.yaml             # Job Nuclei DAST
+    dvwa-auth-job.yaml          # Job extraction cookie DVWA
+    sqlmap-job.yaml             # Job SQLMap
+    ffuf-job.yaml               # Job ffuf
+    ffuf-wordlist-cm.yaml       # ConfigMap wordlist ffuf
+    xss-job.yaml                # Job XSStrike
+    orchestrator-rbac.yaml      # ServiceAccount + RBAC
+    seed-urls.juice-shop.txt    # Seed URLs manuels Juice Shop
+    seed-urls.dvwa.txt          # Seed URLs manuels DVWA
+    seed-params.juice-shop.txt  # Seed URLs avec params Juice Shop
+    seed-params.dvwa.txt        # Seed URLs avec params DVWA
+  k8s/
+    namespaces/namespaces.yaml
+    defectdojo/values.yaml
+    n8n/
+    targets/
+      juice-shop.yaml           # Deployment + Service Juice Shop
+      dvwa.yaml                 # Deployment + Service DVWA
+    thehive/
+    monitoring/
+    wazuh/
+  n8n-workflows/
+    voc-master-dashboard.json   # Workflow consolide n8n
+  orchestrator/
+    Dockerfile                  # Image Job orchestrateur k8s
+\end{lstlisting}
+
+
+
+\end{document}

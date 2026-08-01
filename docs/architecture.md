@@ -15,7 +15,8 @@ route → track → report. All components are open-source community editions.
 | Case management  | TheHive Community Edition | voc-core     | Auto-creates cases for Critical/High   |
 | Prioritization   | prioritization-service    | voc-core     | FastAPI: (CVSS + EPSS + KEV) x asset context |
 | Scanning         | Grype / Nuclei / sqlmap / ffuf / XSStrike | scanning | Jobs that publish to DefectDojo |
-| SIEM *(opt-in)*  | Wazuh manager             | voc-core     | HIDS + rules engine, API-only (no indexer/dashboard) |
+| SIEM *(opt-in)*  | Wazuh manager             | voc-core     | HIDS rules engine, agent enrolment, REST API (no indexer/dashboard) |
+| SIEM agent *(opt-in)* | Wazuh agent (DaemonSet) | voc-siem  | Watches the cluster node: FIM, rootcheck, SCA, log collection |
 | Monitoring *(opt-in)* | kube-prometheus-stack | monitoring  | Prometheus + Grafana — **disabled by default**, see below |
 | Targets          | Juice Shop, DVWA          | targets      | Intentionally vulnerable lab apps      |
 
@@ -24,7 +25,17 @@ Both opt-in components are off unless `VOC_ENABLE_WAZUH=1` /
 `voc-deploy wazuh` / `voc-deploy monitoring`. Grafana was disabled because it
 duplicated what DefectDojo and the n8n dashboard already show while costing
 ~2 GB of RAM and a PVC; nothing was deleted, and `voc-deploy no-monitoring`
-tears it back down.
+tears it back down. `voc-deploy no-wazuh` does the same for the SIEM.
+
+### Why the Wazuh agent gets its own namespace
+
+`voc-core` enforces the `baseline` pod-security level, which forbids hostPath
+volumes. A host intrusion detection agent whose job is watching the node's
+`/etc`, `/bin` and `/sbin` cannot work under that rule. Rather than drop
+`voc-core` to `privileged` — which would hand the same exemption to
+DefectDojo, n8n and TheHive — the agent alone runs in `voc-siem`, a namespace
+labelled `enforce: privileged` with `audit`/`warn` still at `baseline`. The
+manager stays in `voc-core` and complies with it.
 
 ## Data flow
 
@@ -52,6 +63,20 @@ tears it back down.
 
 5. **Track** — TheHive cases hold the remediation workflow; status flows back
    manually or (stretch) via Jira/GitLab integration.
+
+5b. **Detect** *(opt-in, parallel to 1-5)* — the Wazuh agent reports file
+   integrity changes, rootcheck/SCA findings and log events from the cluster
+   node to the manager, which evaluates them against its rule set. Every alert
+   at level 7 or above is POSTed by the manager's `integrator` daemon to the
+   n8n webhook `/webhook/voc/alert/wazuh`, normalized (Wazuh level 0-15 →
+   TheHive severity 1-4, MITRE technique IDs and observables extracted) and
+   turned into a TheHive alert. This is the detection half of the platform:
+   scanners tell you what *could* be exploited, Wazuh tells you what someone
+   is *doing right now*, and both converge on the same case queue.
+
+   There is no Wazuh indexer or dashboard — the manager REST API does not
+   serve alerts, so the webhook is the transport rather than a poll. See
+   `k8s/wazuh/wazuh-manager.yaml` for the full reasoning.
 
 6. **Report** — the n8n master dashboard reads DefectDojo directly. Grafana +
    Prometheus remain available for cluster metrics (`voc-deploy monitoring`)

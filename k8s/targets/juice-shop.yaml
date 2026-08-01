@@ -23,13 +23,18 @@ spec:
           ports:
             - containerPort: 3000
               name: http
+          # Juice Shop is single-process Node. At the previous 500m limit it
+          # stopped answering under DAST load, nuclei counted 30 timeouts and
+          # dropped the host from its target list — every scan returned zero
+          # findings. A scan target that cannot absorb a scan is not a useful
+          # target, so it gets a real core to work with.
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: 200m
+              memory: 256Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: "2"
+              memory: 1Gi
           readinessProbe:
             httpGet:
               path: /

@@ -17,6 +17,7 @@ old `scan-trigger.json` and `defectdojo-routing.json` with a unified dashboard.
 | **Dashboard API** | `GET /webhook/voc/dashboard` returns full findings summary |
 | **Priority Routing** | Polls DefectDojo every 5 min, routes findings by priority tag |
 | **Health Checks** | Pings all services every 5 min, stores status in workflow static data |
+| **SIEM Ingest** | Receives Wazuh alerts (level 7+) and turns them into TheHive alerts |
 | **Error Handling** | On scan failure, captures diagnostics and logs to execution history |
 
 ### Webhook Endpoints
@@ -28,6 +29,23 @@ After importing and activating the workflow in n8n:
 | `POST` | `/webhook/voc/scan/full` | Start a full scan pipeline |
 | `POST` | `/webhook/voc/scan/quick` | Start a quick scan (skip nuclei + xss) |
 | `GET`  | `/webhook/voc/dashboard` | Get current findings summary + metrics |
+| `POST` | `/webhook/voc/alert/wazuh` | SIEM ingest — called by the Wazuh manager, not by humans |
+
+### SIEM ingest (`/webhook/voc/alert/wazuh`)
+
+The Wazuh manager's `integrator` daemon POSTs every alert at level 7 or above
+to this endpoint (there is no indexer to poll — see
+`k8s/wazuh/wazuh-manager.yaml`). The payload is Wazuh's `shuffle` integration
+format, so the full alert is under `all_fields`.
+
+`Normalize Wazuh Alert` maps it onto TheHive: rule level 0-15 becomes severity
+1-4 (7-9 → medium, 10-11 → high, 12+ → critical), rule groups and MITRE
+technique IDs become tags, and source IP, agent hostname, tampered file path
+and usernames become observables. `alert.id` is used as the `sourceRef`, so a
+replayed alert dedupes instead of creating a second case.
+
+Nothing to configure: the endpoint exists whenever the workflow is active, and
+it is only reachable inside the cluster.
 
 ### Dashboard API Response
 

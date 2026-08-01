@@ -27,3 +27,23 @@ metadata:
   labels:
     pod-security.kubernetes.io/enforce: baseline
     voc.project/target: "true"
+---
+# The Wazuh agent is a host intrusion detection agent: watching the node's
+# /etc, /usr/bin and /usr/sbin is its entire job, and hostPath volumes are
+# forbidden under `baseline`. Rather than drop voc-core to `privileged` and
+# hand that exemption to DefectDojo, n8n and TheHive as well, the one
+# workload that needs to see the node gets its own namespace. Everything
+# else in the Wazuh deployment — the manager included — stays in voc-core
+# under `baseline`.
+#
+# audit/warn stay at baseline so any violation *other* than the hostPath
+# mounts still shows up in the audit log instead of passing silently.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: voc-siem
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+    voc.project/component: "wazuh-agent"

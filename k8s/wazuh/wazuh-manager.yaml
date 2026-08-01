@@ -1,44 +1,391 @@
-# Wazuh 4.9 manager — SIEM / HIDS for the VOC lab.
+# Wazuh 4.14 manager — SIEM / HIDS for the VOC lab.
 #
 # OPT-IN. Not deployed by run-all.sh unless VOC_ENABLE_WAZUH=1.
 # Deploy on demand with:  voc-deploy wazuh
 #
-# Manager-only on purpose. The full Wazuh stack (manager + OpenSearch
-# indexer + dashboard) wants 5-6 GB of RAM, which does not fit next to
-# DefectDojo + TheHive + n8n on a laptop. The manager alone gives you:
-#   - the agent enrolment service (:1514/:1515) for monitored hosts
-#   - the rules/decoders engine and local alert log
-#   - the REST API (:55000), which is what n8n consumes
-# Alerts are pulled from the API into the existing pipeline (n8n ->
-# TheHive / DefectDojo) instead of being displayed in a Wazuh dashboard.
-# That keeps one pane of glass and saves ~4 GB.
+# Manager + agents, no indexer, no Wazuh dashboard. The full stack wants
+# 5-6 GB of RAM for OpenSearch alone, which does not fit next to DefectDojo
+# + TheHive + n8n on a 16 GB laptop. What is kept:
+#   - the rules/decoders engine and the local alert log
+#   - agent enrolment (:1515 authd, password-protected) and the agent
+#     channel (:1514)
+#   - the REST API (:55000) for agent/rule/config management
+#
+# How alerts leave the manager
+# ----------------------------
+# The manager API does NOT serve alerts — in a full deployment they are read
+# out of the indexer, which we do not run. Instead the manager's built-in
+# `integrator` daemon POSTs every alert at or above <level> to a webhook (the
+# `shuffle` integration is a plain "POST the alert as JSON" forwarder, which
+# is exactly what we want; see the <integration> block in ossec.conf below).
+# The webhook is n8n, so SIEM alerts land in the same pipeline as scanner
+# findings and end up as TheHive cases. One pane of glass, ~4 GB saved.
+#
+#   wazuh-agent --> wazuh-manager --> integrator --> n8n webhook --> TheHive
 #
 # Access after deploy:
+#   voc-wazuh status | agents | alerts | test
 #   kubectl -n voc-core port-forward svc/wazuh-manager 55000:55000
-#   curl -sku wazuh-wui:VocLabWazuh1! https://localhost:55000/security/user/authenticate
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: wazuh-manager-data
-  namespace: voc-core
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: local-path
-  resources:
-    requests:
-      storage: 5Gi
+#   curl -sku wazuh-wui:VocLabWazuh1! -X POST \
+#     'https://localhost:55000/security/user/authenticate?raw=true'
 ---
 apiVersion: v1
 kind: Secret
 metadata:
   name: wazuh-api-creds
   namespace: voc-core
+  labels:
+    app: wazuh-manager
 type: Opaque
 stringData:
   # Lab credentials. Wazuh rejects weak API passwords, hence the shape.
   API_USERNAME: wazuh-wui
   API_PASSWORD: VocLabWazuh1!
+  # Shared enrolment secret. The manager reads it from /var/ossec/etc/authd.pass,
+  # the agents send it to authd on :1515. Without it any pod in the cluster
+  # could register itself as an agent.
+  authd.pass: VocLabAgentEnrol1!
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-manager-conf
+  namespace: voc-core
+  labels:
+    app: wazuh-manager
+data:
+  # Mounted at /wazuh-config-mount/etc/ossec.conf. The image's entrypoint
+  # rsyncs /wazuh-config-mount over /var/ossec on every start, so this file
+  # is the single source of truth for the manager configuration — editing it
+  # and re-running `voc-deploy wazuh` is enough to change manager behaviour.
+  ossec.conf: |
+    <ossec_config>
+      <global>
+        <jsonout_output>yes</jsonout_output>
+        <alerts_log>yes</alerts_log>
+        <logall>no</logall>
+        <logall_json>no</logall_json>
+        <email_notification>no</email_notification>
+        <agents_disconnection_time>10m</agents_disconnection_time>
+        <agents_disconnection_alert_time>0</agents_disconnection_alert_time>
+        <!-- Offline lab: do not phone home for version checks. -->
+        <update_check>no</update_check>
+      </global>
+
+      <alerts>
+        <log_alert_level>3</log_alert_level>
+        <email_alert_level>12</email_alert_level>
+      </alerts>
+
+      <logging>
+        <log_format>plain</log_format>
+      </logging>
+
+      <!-- Agent channel. TCP only: UDP loses events under scan load. -->
+      <remote>
+        <connection>secure</connection>
+        <port>1514</port>
+        <protocol>tcp</protocol>
+        <queue_size>131072</queue_size>
+      </remote>
+
+      <!-- Agent enrolment (authd). Password-protected, see authd.pass. -->
+      <auth>
+        <disabled>no</disabled>
+        <port>1515</port>
+        <use_source_ip>no</use_source_ip>
+        <purge>yes</purge>
+        <use_password>yes</use_password>
+        <!-- An agent pod that restarts comes back with the same name but a
+             new key. The default force policy only replaces an agent that
+             has been disconnected for an hour, which would leave a restarted
+             agent unable to enrol; in a lab, last registration wins. -->
+        <force>
+          <enabled>yes</enabled>
+          <key_mismatch>yes</key_mismatch>
+          <disconnected_time enabled="no">1h</disconnected_time>
+          <after_registration_time>0</after_registration_time>
+        </force>
+        <ciphers>HIGH:!ADH:!EXP:!MD5:!RC4:!3DES:!CAMELLIA:@STRENGTH</ciphers>
+        <ssl_verify_host>no</ssl_verify_host>
+        <ssl_manager_cert>etc/sslmanager.cert</ssl_manager_cert>
+        <ssl_manager_key>etc/sslmanager.key</ssl_manager_key>
+        <ssl_auto_negotiate>no</ssl_auto_negotiate>
+      </auth>
+
+      <!-- No indexer is deployed, so both the vulnerability-detection module
+           and the indexer connector are off. Leaving them on makes the
+           manager retry an OpenSearch connection forever and fills ossec.log
+           with connection errors. Vulnerability data is DefectDojo's job in
+           this project anyway — Wazuh is here for host/behavioural events. -->
+      <vulnerability-detection>
+        <enabled>no</enabled>
+      </vulnerability-detection>
+
+      <indexer>
+        <enabled>no</enabled>
+      </indexer>
+
+      <rootcheck>
+        <disabled>no</disabled>
+        <check_files>yes</check_files>
+        <check_trojans>yes</check_trojans>
+        <check_dev>yes</check_dev>
+        <check_sys>yes</check_sys>
+        <check_pids>yes</check_pids>
+        <check_ports>yes</check_ports>
+        <check_if>yes</check_if>
+        <frequency>43200</frequency>
+        <rootkit_files>etc/rootcheck/rootkit_files.txt</rootkit_files>
+        <rootkit_trojans>etc/rootcheck/rootkit_trojans.txt</rootkit_trojans>
+        <skip_nfs>yes</skip_nfs>
+      </rootcheck>
+
+      <wodle name="cis-cat">
+        <disabled>yes</disabled>
+      </wodle>
+
+      <wodle name="osquery">
+        <disabled>yes</disabled>
+      </wodle>
+
+      <wodle name="syscollector">
+        <disabled>no</disabled>
+        <interval>1h</interval>
+        <scan_on_start>yes</scan_on_start>
+        <hardware>yes</hardware>
+        <os>yes</os>
+        <network>yes</network>
+        <packages>yes</packages>
+        <ports all="no">yes</ports>
+        <processes>yes</processes>
+      </wodle>
+
+      <sca>
+        <enabled>yes</enabled>
+        <scan_on_start>yes</scan_on_start>
+        <interval>12h</interval>
+        <skip_nfs>yes</skip_nfs>
+      </sca>
+
+      <syscheck>
+        <disabled>no</disabled>
+        <frequency>43200</frequency>
+        <scan_on_start>yes</scan_on_start>
+        <directories check_all="yes">/etc,/usr/bin,/usr/sbin</directories>
+        <directories check_all="yes">/bin,/sbin,/boot</directories>
+        <ignore>/etc/mtab</ignore>
+        <ignore>/etc/hosts.deny</ignore>
+        <ignore>/etc/mail/statistics</ignore>
+        <ignore>/etc/random-seed</ignore>
+        <ignore>/etc/random.seed</ignore>
+        <ignore>/etc/adjtime</ignore>
+        <ignore>/etc/httpd/logs</ignore>
+        <ignore>/etc/utmpx</ignore>
+        <ignore>/etc/wtmpx</ignore>
+        <ignore>/etc/cups/certs</ignore>
+        <ignore>/etc/dumpdates</ignore>
+        <ignore>/etc/svc/volatile</ignore>
+        <skip_nfs>yes</skip_nfs>
+        <skip_dev>yes</skip_dev>
+        <skip_proc>yes</skip_proc>
+        <skip_sys>yes</skip_sys>
+        <process_priority>10</process_priority>
+        <max_eps>50</max_eps>
+        <synchronization>
+          <enabled>yes</enabled>
+          <interval>5m</interval>
+          <max_interval>1h</max_interval>
+          <max_eps>10</max_eps>
+        </synchronization>
+      </syscheck>
+
+      <command>
+        <name>disable-account</name>
+        <executable>disable-account</executable>
+        <timeout_allowed>yes</timeout_allowed>
+      </command>
+
+      <command>
+        <name>restart-wazuh</name>
+        <executable>restart-wazuh</executable>
+      </command>
+
+      <command>
+        <name>firewall-drop</name>
+        <executable>firewall-drop</executable>
+        <timeout_allowed>yes</timeout_allowed>
+      </command>
+
+      <command>
+        <name>host-deny</name>
+        <executable>host-deny</executable>
+        <timeout_allowed>yes</timeout_allowed>
+      </command>
+
+      <ruleset>
+        <decoder_dir>ruleset/decoders</decoder_dir>
+        <rule_dir>ruleset/rules</rule_dir>
+        <rule_exclude>0215-policy_rules.xml</rule_exclude>
+        <list>etc/lists/audit-keys</list>
+        <list>etc/lists/amazon/aws-eventnames</list>
+        <list>etc/lists/security-eventchannel</list>
+        <!-- Local overrides live here; see the voc_rules ConfigMap key. -->
+        <decoder_dir>etc/decoders</decoder_dir>
+        <rule_dir>etc/rules</rule_dir>
+      </ruleset>
+
+      <rule_test>
+        <enabled>yes</enabled>
+        <threads>1</threads>
+        <max_sessions>64</max_sessions>
+        <session_timeout>15m</session_timeout>
+      </rule_test>
+
+      <cluster>
+        <name>wazuh</name>
+        <node_name>voc-manager</node_name>
+        <node_type>master</node_type>
+        <key/>
+        <port>1516</port>
+        <bind_addr>0.0.0.0</bind_addr>
+        <nodes>
+          <node>wazuh-manager</node>
+        </nodes>
+        <hidden>no</hidden>
+        <disabled>yes</disabled>
+      </cluster>
+
+      <!-- ==================================================================
+           This is the piece that wires Wazuh into the rest of VOC.
+
+           `shuffle` is Wazuh's generic webhook integration: for every alert
+           at or above <level> it POSTs the whole alert as JSON to <hook_url>.
+           Pointing it at n8n turns SIEM alerts into the same kind of input
+           the scanners already produce, and n8n does the routing to TheHive.
+
+           <level>7</level> is the noise/signal line: 1-6 is informational
+           (agent started, routine file change), 7+ is "a human should know".
+           Lower it to 5 for a demo with more traffic, raise it to 10 for
+           attacks only.
+           ================================================================== -->
+      <integration>
+        <name>shuffle</name>
+        <hook_url>http://n8n.voc-core.svc.cluster.local:5678/webhook/voc/alert/wazuh</hook_url>
+        <level>7</level>
+        <alert_format>json</alert_format>
+      </integration>
+    </ossec_config>
+
+    <ossec_config>
+      <localfile>
+        <log_format>command</log_format>
+        <command>df -P</command>
+        <frequency>360</frequency>
+      </localfile>
+
+      <localfile>
+        <log_format>full_command</log_format>
+        <command>netstat -tulpn | sed 's/\([[:alnum:]]\+\)\ \+[[:digit:]]\+\ \+[[:digit:]]\+\ \+\(.*\):\([[:digit:]]*\)\ \+\([0-9\.\:\*]\+\).\+\ \([[:digit:]]*\/[[:alnum:]\-]*\).*/\1 \2 == \3 == \4 \5/' | sort -k 4 -g | sed 's/ == \(.*\) ==/:\1/' | sed 1,2d</command>
+        <alias>netstat listening ports</alias>
+        <frequency>360</frequency>
+      </localfile>
+    </ossec_config>
+
+  # Replacement s6 service script for filebeat, mounted over
+  # /etc/services.d/filebeat/run.
+  #
+  # Filebeat's only job in a Wazuh deployment is shipping alerts to the
+  # OpenSearch indexer. There is no indexer here (see the header), so it
+  # spends its life retrying a DNS name that does not resolve and writing an
+  # error to the pod log every 30 seconds — which is the first thing anyone
+  # sees in `kubectl logs`. It cannot simply be killed: its `finish` script
+  # tears down every other s6 service, taking the container with it. So the
+  # service stays "up" and does nothing.
+  #
+  # Deploying an indexer later means deleting this key and its volumeMount.
+  filebeat-run: |
+    #!/usr/bin/with-contenv sh
+    echo >&2 "Filebeat disabled by VOC: no Wazuh indexer is deployed."
+    echo >&2 "Alerts leave this manager through the integrator webhook -> n8n."
+    exec sleep infinity
+
+  # Shared agent configuration. The manager pushes this to every enrolled
+  # agent in the `default` group automatically (it lands in
+  # /var/ossec/etc/shared/default/agent.conf and is merged into merged.mg),
+  # so agents are configured centrally instead of per-pod. Change it here,
+  # run `voc-deploy wazuh`, and every agent picks it up within a minute.
+  agent.conf: |
+    <agent_config>
+      <syscheck>
+        <disabled>no</disabled>
+        <frequency>43200</frequency>
+        <scan_on_start>yes</scan_on_start>
+
+        <!-- Realtime FIM on the node's config surface and binaries, mounted
+             read-only into the agent pod at /host. This is what turns
+             "somebody changed a file on the cluster node" into an alert.
+             Paths follow the k3d node's layout (/bin and /sbin, no
+             /usr/bin); see the volumes in k8s/wazuh/wazuh-agent.yaml. -->
+        <directories realtime="yes" check_all="yes" report_changes="yes">/host/etc</directories>
+        <directories check_all="yes">/host/bin,/host/sbin</directories>
+
+        <!-- Dedicated realtime directory used by `voc-wazuh test` to prove
+             the whole chain end to end without touching anything real. -->
+        <directories realtime="yes" check_all="yes" report_changes="yes">/var/ossec/fim-test</directories>
+
+        <ignore>/host/etc/mtab</ignore>
+        <ignore>/host/etc/hosts.deny</ignore>
+        <ignore>/host/etc/random-seed</ignore>
+        <ignore>/host/etc/adjtime</ignore>
+        <!-- k3s rewrites these on every apply; they are not tampering. -->
+        <ignore>/host/etc/rancher/k3s</ignore>
+        <ignore type="sregex">^/host/etc/cni/</ignore>
+        <ignore type="sregex">.log$|.swp$</ignore>
+        <skip_nfs>yes</skip_nfs>
+        <skip_dev>yes</skip_dev>
+        <skip_proc>yes</skip_proc>
+        <skip_sys>yes</skip_sys>
+        <max_eps>50</max_eps>
+      </syscheck>
+
+      <rootcheck>
+        <disabled>no</disabled>
+        <frequency>43200</frequency>
+      </rootcheck>
+
+      <sca>
+        <enabled>yes</enabled>
+        <scan_on_start>yes</scan_on_start>
+        <interval>12h</interval>
+      </sca>
+
+      <!-- Log collection. The k3d node is a container, so there is no
+           systemd journal and no /var/log/auth.log to read. voc-audit.log is
+           the agent-local file `voc-wazuh test` writes to, which exercises
+           the decoder + rule + alert path with real sshd-shaped events.
+           NOTE: only <localfile> types that read files work through shared
+           config — `command` localfiles need logcollector.remote_commands=1
+           on the agent and are deliberately left out. -->
+      <localfile>
+        <log_format>syslog</log_format>
+        <location>/var/log/voc-audit.log</location>
+      </localfile>
+    </agent_config>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wazuh-manager-data
+  namespace: voc-core
+  labels:
+    app: wazuh-manager
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -59,9 +406,14 @@ spec:
       labels:
         app: wazuh-manager
     spec:
+      securityContext:
+        # The manager writes as root and drops to the `wazuh` user itself.
+        # 101 is the wazuh group in the official image; setting it as the
+        # fsGroup makes the PVC writable on first mount.
+        fsGroup: 101
       containers:
         - name: wazuh-manager
-          image: wazuh/wazuh-manager:4.9.2
+          image: wazuh/wazuh-manager:4.14.6
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 1514
@@ -74,10 +426,13 @@ spec:
               name: api
               protocol: TCP
           env:
-            # No indexer deployed, so tell the manager not to try shipping
-            # alerts to one — otherwise filebeat retries forever and fills
-            # the log with connection errors.
+            # No indexer deployed. Empty INDEXER_URL keeps the entrypoint from
+            # wiring filebeat up to an OpenSearch that does not exist.
             - name: INDEXER_URL
+              value: ""
+            - name: INDEXER_USERNAME
+              value: ""
+            - name: INDEXER_PASSWORD
               value: ""
             - name: FILEBEAT_SSL_VERIFICATION_MODE
               value: "none"
@@ -92,24 +447,79 @@ spec:
                   name: wazuh-api-creds
                   key: API_PASSWORD
           volumeMounts:
+            # --- configuration (rsynced into /var/ossec by the entrypoint) ---
+            - name: config
+              mountPath: /wazuh-config-mount/etc/ossec.conf
+              subPath: ossec.conf
+              readOnly: true
+            - name: config
+              mountPath: /wazuh-config-mount/etc/shared/default/agent.conf
+              subPath: agent.conf
+              readOnly: true
+            - name: authd-pass
+              mountPath: /wazuh-config-mount/etc/authd.pass
+              subPath: authd.pass
+              readOnly: true
+            # Separate volume purely because s6 needs this one executable and
+            # the config files above must not be.
+            - name: filebeat-svc
+              mountPath: /etc/services.d/filebeat/run
+              subPath: filebeat-run
+              readOnly: true
+            # --- persistent state ---
+            # These are the directories the official image declares as
+            # permanent data; the entrypoint seeds an empty volume from the
+            # image on first boot. Persisting anything less loses the agent
+            # keys on restart and every agent has to re-enrol.
             - name: data
-              mountPath: /var/ossec/data
+              mountPath: /var/ossec/api/configuration
+              subPath: wazuh/var/ossec/api/configuration
+            - name: data
+              mountPath: /var/ossec/etc
+              subPath: wazuh/var/ossec/etc
+            - name: data
+              mountPath: /var/ossec/logs
+              subPath: wazuh/var/ossec/logs
+            - name: data
+              mountPath: /var/ossec/queue
+              subPath: wazuh/var/ossec/queue
+            - name: data
+              mountPath: /var/ossec/var/multigroups
+              subPath: wazuh/var/ossec/var/multigroups
+            - name: data
+              mountPath: /var/ossec/integrations
+              subPath: wazuh/var/ossec/integrations
+            - name: data
+              mountPath: /var/ossec/active-response/bin
+              subPath: wazuh/var/ossec/active-response/bin
+            - name: data
+              mountPath: /var/ossec/agentless
+              subPath: wazuh/var/ossec/agentless
+            - name: data
+              mountPath: /var/ossec/wodles
+              subPath: wazuh/var/ossec/wodles
+            - name: data
+              mountPath: /etc/filebeat
+              subPath: filebeat/etc/filebeat
+            - name: data
+              mountPath: /var/lib/filebeat
+              subPath: filebeat/var/lib/filebeat
           resources:
             requests:
               cpu: 200m
-              memory: 640Mi
+              memory: 768Mi
             limits:
-              cpu: 1000m
-              memory: 1536Mi
-          # Wazuh's first boot generates certs and initialises the rule set;
-          # a startupProbe gives it room to do that without the liveness
-          # probe killing the pod mid-initialisation.
+              cpu: "1"
+              memory: 2Gi
+          # First boot generates certs, seeds the permanent data volumes and
+          # compiles the rule set; a startupProbe gives it room to do that
+          # without the liveness probe killing the pod mid-initialisation.
           startupProbe:
             tcpSocket:
               port: 55000
             initialDelaySeconds: 30
             periodSeconds: 10
-            failureThreshold: 30
+            failureThreshold: 40
           readinessProbe:
             tcpSocket:
               port: 55000
@@ -122,6 +532,23 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
       volumes:
+        - name: config
+          configMap:
+            name: wazuh-manager-conf
+        - name: filebeat-svc
+          configMap:
+            name: wazuh-manager-conf
+            items:
+              - key: filebeat-run
+                path: filebeat-run
+            defaultMode: 0755
+        - name: authd-pass
+          secret:
+            secretName: wazuh-api-creds
+            items:
+              - key: authd.pass
+                path: authd.pass
+            defaultMode: 0640
         - name: data
           persistentVolumeClaim:
             claimName: wazuh-manager-data

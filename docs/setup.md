@@ -117,10 +117,42 @@ voc-deploy thehive       # TheHive
 Optional components — off by default because they are the two heaviest
 things in the stack:
 ```bash
-voc-deploy wazuh         # Wazuh manager (SIEM), ~1.5 GB
+voc-deploy wazuh         # Wazuh SIEM: manager + node agent, ~2 GB
+voc-deploy no-wazuh      # remove the SIEM again (also drops its 5 Gi PVC)
 voc-deploy monitoring    # Prometheus + Grafana, ~2 GB
 voc-deploy no-monitoring # remove Prometheus + Grafana again
 ```
+
+### Wazuh (SIEM / host intrusion detection)
+
+`voc-deploy wazuh` brings up two things: the **manager** in `voc-core` (rules
+engine, agent enrolment on :1515, REST API on :55000) and a **DaemonSet
+agent** in `voc-siem` that watches the cluster node — realtime file integrity
+monitoring on `/etc`, `/bin`, `/sbin`, plus rootcheck and CIS benchmark scans.
+
+There is no Wazuh indexer or dashboard: OpenSearch alone would cost 5-6 GB.
+Alerts leave the manager through its `integrator` daemon, which POSTs every
+alert at level 7 or above to n8n, which creates a TheHive alert. Nothing to
+poll, one case queue for both scanner findings and SIEM detections.
+
+```bash
+voc-wazuh status         # manager, agents, where alerts are going
+voc-wazuh agents         # enrolled agents and their connection state
+voc-wazuh alerts 20      # last 20 alerts the manager recorded
+voc-wazuh test           # fire benign test events and follow them through
+voc-wazuh api /agents/summary/status   # raw REST API call
+```
+
+`voc-wazuh test` writes ten failed SSH logins to a monitored log (rule 5712,
+"sshd brute force", level 10) and tampers with a file under realtime FIM
+(rule 550, level 7), then shows the alerts and what was forwarded. Both land
+in TheHive within about half a minute.
+
+To tune what gets forwarded, edit the `<integration>` block in
+`k8s/wazuh/wazuh-manager.yaml` (`<level>` is the threshold) and re-run
+`voc-deploy wazuh` — it restarts the manager so the change takes effect.
+Agent policy (which directories are watched, which logs are read) lives in the
+`agent.conf` key of the same file and is pushed to every agent by the manager.
 
 Check progress:
 ```bash

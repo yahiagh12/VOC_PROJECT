@@ -683,7 +683,12 @@ else
       target_short="${NUCLEI_TARGET_SHORTS[$i]}"
 
       log_info "Waiting for $JOB_NAME ..."
-      if ! wait_for_job "$JOB_NAME" scanning 900 "nuclei scan ($target_short)"; then
+      # 900s was not enough: nuclei downloads and signature-verifies its
+      # template set on every run before issuing a single request, and the
+      # job was being killed mid-scan and reported as SKIP. Trimming the
+      # template set (see nuclei-phase2-job.yaml) is the real fix; this is
+      # the safety margin behind it.
+      if ! wait_for_job "$JOB_NAME" scanning 1800 "nuclei scan ($target_short)"; then
         kubectl delete job "$JOB_NAME" -n scanning >/dev/null 2>&1 || true
         continue
       fi
@@ -969,8 +974,19 @@ done
 # --- Automatic Post-Scan Pipeline Automation ---
 log_info "Running post-scan automation (prioritization pass & credential sync)..."
 # 1. Sync API keys across all namespaces & env
-source "$TOOLBOX_DIR/profile.sh" 2>/dev/null || true
-voc_sync_keys 2>/dev/null || true
+# TOOLBOX_DIR was never defined: under `set -u` the expansion below aborted
+# the whole script right here, so neither the key sync nor the prioritization
+# pass that follows it ever ran after a scan. The redirect and `|| true` did
+# not help — an unbound variable fails during expansion, before the command
+# is executed. Findings therefore sat unscored until the service's hourly pass.
+TOOLBOX_DIR="${TOOLBOX_DIR:-$(dirname "$SCRIPT_DIR")/toolbox}"
+if [ -f "$TOOLBOX_DIR/profile.sh" ]; then
+  # shellcheck disable=SC1091
+  source "$TOOLBOX_DIR/profile.sh" 2>/dev/null || true
+  voc_sync_keys 2>/dev/null || true
+else
+  log_warning "toolbox profile not found at $TOOLBOX_DIR — skipping key sync"
+fi
 
 # 2. Trigger Prioritization Service scoring pass
 kubectl exec -n voc-core deploy/prioritization-service -- python3 -c "

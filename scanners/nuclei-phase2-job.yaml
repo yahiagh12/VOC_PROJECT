@@ -34,18 +34,60 @@ spec:
           args:
             - |
               set -e
-              # Web-relevant tags only (~1K templates instead of 10K+).
+              # Web-relevant tags only.
+              #
+              # Measured, not assumed: dropping the `cve` tag took the loaded
+              # template count from 5975 to 5417 — 9%, not the "half" it was
+              # worth guessing at. The tag list is NOT the cost driver, so
+              # `cve` stays and the coverage story stays intact.
+              #
+              # The real startup cost is that nuclei downloads and
+              # signature-verifies the whole template set on EVERY run (the
+              # log opens with "nuclei-templates are not installed,
+              # installing..." despite the note below). 15 minutes in, a run
+              # had reached "Templates clustered" without issuing a single
+              # request. The scan itself is cheap by comparison: ~15900
+              # requests at 75/s is under four minutes.
+              #
+              # Mitigated here with more CPU for verification and a longer
+              # harvest timeout in scripts/scan-all.sh. The durable fix is to
+              # cache /root/nuclei-templates in a PVC, exactly like
+              # scanners/grype-db-pvc.yaml already does for the Grype DB.
               # Excludes dos/fuzz/intrusive/brute-force which are slow,
               # noisy, or inappropriate for automated lab scanning.
               # We don't need to update templates because they are baked into the image.
               if [ -s /targets/all_urls.txt ]; then
+                # Pacing matters more than template count here. Juice Shop is
+                # a single-process Node app capped at 500m CPU: at the old
+                # -rate-limit 300 / -bulk-size 50 it stopped answering within
+                # seconds, nuclei counted 30 timeouts, marked the host
+                # "unresponsive permanently" and dropped it from the target
+                # list. Every run ended "Scan completed. No results found."
+                # after ~50s with an empty JSONL — which imported cleanly as
+                # zero findings, so nothing looked broken downstream.
+                #
+                #   -rate-limit 75    requests/sec the target can actually serve.
+                #                     300 collapsed it at 500m CPU; 25 was safe
+                #                     but took 35+ min. 75 against the 2-core
+                #                     limit set in k8s/targets/juice-shop.yaml
+                #                     is the working balance.
+                #   -bulk-size 25     templates in flight per target
+                #   -c 25             concurrent template threads
+                #   -max-host-error 100  survive transient timeouts instead of
+                #                     abandoning the host after 30
+                #   -ni               no Interactsh: OAST callbacks to oast.fun
+                #                     cannot resolve back into this cluster and
+                #                     only added timeouts
                 nuclei -l /targets/all_urls.txt \
                       -severity low,medium,high,critical \
                       -tags cve,misconfig,exposure,tech,xss,sqli,lfi,rfi,rce,ssrf,redirect,auth-bypass,default-login \
                       -etags dos,fuzz,intrusive,brute-force \
                       -timeout 10 \
-                      -bulk-size 50 \
-                      -rate-limit 300 \
+                      -bulk-size 25 \
+                      -c 25 \
+                      -rate-limit 75 \
+                      -max-host-error 100 \
+                      -ni \
                       -H "Cookie: __COOKIE__" \
                       -jsonl -o /work/nuclei.jsonl
               else
@@ -65,5 +107,7 @@ spec:
               cpu: "100m"
               memory: "128Mi"
             limits:
-              cpu: "1"
+              # Template signature verification is CPU-bound and single-run
+              # cost; 1 core made it a large fraction of the scan.
+              cpu: "2"
               memory: "2048Mi"
