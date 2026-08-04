@@ -825,18 +825,18 @@ echo "╠══════════════════════╬�
 
 for target_pair in "${DISCOVERY_TARGETS[@]}"; do
   ts="${target_pair%%.*}"
-  # Grype uses the container image shortname (juice-shop or web-dvwa)
-  # but for the table we just find the grype file with that target name
-  # substring in it or lookup by known mappings if it doesn't match perfectly.
-  # But since grype filenames are `grype_${IMAGE_SHORT}_$TIMESTAMP.json`:
-  # juice-shop -> juice-shop, dvwa -> web-dvwa
-  if [ "$ts" = "dvwa" ]; then
-      grype_file="$REPORTS_DIR/grype_web-dvwa_${TIMESTAMP}.json"
-  else
-      grype_file="$REPORTS_DIR/grype_${ts}_${TIMESTAMP}.json"
-  fi
-  
-  if [ -s "$grype_file" ]; then
+  # The scan step normalizes the image shortname `web-dvwa` to `dvwa`, so the
+  # report is grype_dvwa_<ts>.json. This table used to look only for the
+  # legacy grype_web-dvwa_<ts>.json name and printed "--" for DVWA even
+  # though 2097 findings had just been imported. Try current name first,
+  # then legacy, so old report sets still render.
+  grype_file=""
+  for _cand in "$REPORTS_DIR/grype_${ts}_${TIMESTAMP}.json" \
+               "$REPORTS_DIR/grype_web-${ts}_${TIMESTAMP}.json"; do
+    if [ -s "$_cand" ]; then grype_file="$_cand"; break; fi
+  done
+
+  if [ -n "$grype_file" ] && [ -s "$grype_file" ]; then
     g_count=$(jq '.matches | length' "$grype_file" 2>/dev/null || echo "ERR")
   else
     g_count="--"
@@ -894,12 +894,22 @@ TOTAL_GRYPE=0 TOTAL_NUCLEI=0 TOTAL_FFUF=0 TOTAL_SQLMAP=0 TOTAL_XSS=0
 TARGET_COUNTS_CSV=""
 for target_pair in "${DISCOVERY_TARGETS[@]}"; do
   ts="${target_pair%%.*}"
-  # Grype uses image shortname, not target shortname
-  if [ "$ts" = "dvwa" ]; then
-    g=$(jq '.matches | length' "$REPORTS_DIR/grype_web-dvwa_${TIMESTAMP}.json" 2>/dev/null || echo 0)
-  else
-    g=$(jq '.matches | length' "$REPORTS_DIR/grype_${ts}_${TIMESTAMP}.json" 2>/dev/null || echo 0)
-  fi
+  # Grype report filename. The scan step normalizes the image shortname
+  # `web-dvwa` to `dvwa` (see IMAGE_SHORT above), so the file is
+  # grype_dvwa_<ts>.json — but this counter was still looking for
+  # grype_web-dvwa_<ts>.json. jq failed, `|| echo 0` swallowed it, and
+  # DVWA's Grype findings (2097 in the last run) were recorded as zero
+  # everywhere downstream: SQLite, voc-history, the Grafana ConfigMap and
+  # the summary table. Try the current name first, fall back to the legacy
+  # one so older report sets still total correctly.
+  g=0
+  for _cand in "$REPORTS_DIR/grype_${ts}_${TIMESTAMP}.json" \
+               "$REPORTS_DIR/grype_web-${ts}_${TIMESTAMP}.json"; do
+    if [ -s "$_cand" ]; then
+      g=$(jq '.matches | length' "$_cand" 2>/dev/null || echo 0)
+      break
+    fi
+  done
   n=$(get_norm_count nuclei "$ts")
   f=$(get_norm_count ffuf "$ts")
   s=$(get_norm_count sqlmap "$ts")

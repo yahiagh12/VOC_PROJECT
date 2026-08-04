@@ -332,7 +332,17 @@ voc_deploy() {
                  n8n import:workflow --input=/tmp/voc-master-dashboard.json 2>&1); then
               echo "$wf_out" | sed 's/^/  /'
               wf_imported=1
+              # `import:workflow` DEACTIVATES the workflow it imports (it says
+              # so: "Deactivating workflow ..."), and an inactive workflow
+              # registers no webhooks at all — every /webhook/voc/* path
+              # returns 404, including the Wazuh SIEM ingest. `publish:workflow`
+              # alone did NOT bring it back; only update:workflow --active=true
+              # did, verified against a live cluster. publish is kept for the
+              # version pointer, update is what actually re-activates. The
+              # latter is deprecated upstream, hence both, hence the probe
+              # further down that turns a silent 404 into a visible warning.
               kubectl exec -n voc-core "$n8n_pod" -- n8n publish:workflow --id=VdT8S1MTBinkKnEH >/dev/null 2>&1 || true
+              kubectl exec -n voc-core "$n8n_pod" -- n8n update:workflow --id=VdT8S1MTBinkKnEH --active=true >/dev/null 2>&1 || true
               break
             fi
             echo "[VOC] Workflow import attempt $wf_try/3 failed, retrying in 15s..."
@@ -356,6 +366,30 @@ voc_deploy() {
             kubectl rollout restart deployment/n8n -n voc-core >/dev/null 2>&1 || true
             kubectl rollout status deployment/n8n -n voc-core --timeout=180s >/dev/null 2>&1 || \
               echo "[VOC] WARNING: n8n restart timed out — check 'kubectl get pods -n voc-core'"
+
+            # Prove the workflow actually came back active. An inactive
+            # workflow looks completely healthy — pod Running, `n8n
+            # list:workflow` shows it — while every webhook 404s and Wazuh
+            # alerts vanish into nothing. Probe one known path rather than
+            # trusting the activation command's exit code.
+            local wh_code=""
+            for _ in $(seq 1 10); do
+              wh_code=$(kubectl exec -n voc-core deploy/n8n -- \
+                wget -qS -O /dev/null http://localhost:5678/webhook/voc/dashboard 2>&1 \
+                | awk '/HTTP\//{print $2; exit}') || wh_code=""
+              [ -n "$wh_code" ] && break
+              sleep 5
+            done
+            if [ "$wh_code" = "200" ]; then
+              echo "[VOC] Workflow is active — webhooks are registered"
+            else
+              echo "[VOC] WARNING: /webhook/voc/dashboard returned '${wh_code:-no response}'."
+              echo "[VOC]          The workflow is imported but NOT active: every webhook"
+              echo "[VOC]          will 404, including Wazuh SIEM ingest. Fix with:"
+              echo "[VOC]          kubectl exec -n voc-core deploy/n8n -- \\"
+              echo "[VOC]            n8n update:workflow --id=VdT8S1MTBinkKnEH --active=true"
+              echo "[VOC]          then: kubectl rollout restart deployment/n8n -n voc-core"
+            fi
           fi
 
           echo "[VOC] Establishing n8n port-forward on :5678..."

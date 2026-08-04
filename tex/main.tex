@@ -11,12 +11,12 @@
 \usepackage{listings}
 \usepackage{booktabs}
 \usepackage{tabularx}
+\usepackage{longtable}
 \usepackage{float}
 \usepackage{amsmath}
 \usepackage{array}
 \usepackage{enumitem}
 \usepackage{tikz}
-\usepackage{mdframed}
 \usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds}
 
 \geometry{hmargin=2.5cm,vmargin=2.5cm}
@@ -58,17 +58,6 @@
     morestring=[b]',
     comment=[l]{\#},
     sensitive=true,
-}
-
-% ---- Screenshot placeholder box ----
-\newcommand{\screenshot}[2]{%
-  \begin{mdframed}[backgroundcolor=gray!8, linecolor=gray!50, linewidth=1pt,
-                   innertopmargin=8pt, innerbottommargin=8pt]
-    \centering
-    {\small\texttt{�� SCREENSHOT NEEDED}}\\[0.3em]
-    {\footnotesize #1}\\[0.2em]
-    {\scriptsize\color{gray} #2}
-  \end{mdframed}%
 }
 
 \newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
@@ -116,7 +105,7 @@ Responsable Sécurité SI\\
 \end{center}
 \vskip1cm
 \begin{center}
-{\textrm{Année universitaire~: 2024--2025}}\\
+{\textrm{Année universitaire~: 2025--2026}}\\
 \end{center}
 \newpage
 
@@ -178,6 +167,7 @@ Le projet couvre~:
     \item L'intégration de cinq scanners open-source couvrant SCA, DAST, SQLi, XSS et fuzzing.
     \item Un service de priorisation basé sur CVSS, EPSS, CISA KEV et le contexte métier.
     \item L'orchestration des scans et le routage des incidents via n8n et TheHive.
+    \item Un volet détection (SIEM/HIDS Wazuh) dont les alertes rejoignent la même file de cas que les findings des scanners.
     \item Un stack de monitoring global (Grafana + Prometheus) qui supervise aussi bien la santé des ressources du système que la santé des vulnérabilités de manière unifiée.
 \end{itemize}
 
@@ -314,7 +304,7 @@ Agrégation       & DefectDojo          & Déduplication, API REST, nombreux par
 Priorisation     & FastAPI (custom)    & CVSS + EPSS + KEV $\times$ contexte métier \\
 Orchestration    & n8n                 & Workflows visuels, cron, webhooks \\
 Gestion de cas   & TheHive             & Suivi d'incidents de sécurité \\
-SIEM (opt.)      & Wazuh               & HIDS + moteur de règles \\
+SIEM (opt.)      & Wazuh manager + agent & HIDS, moteur de règles, alertes routées vers TheHive par webhook \\
 Monitoring (opt.)& Grafana + Prometheus & Dashboards et métriques \\
 \bottomrule
 \end{tabularx}
@@ -345,7 +335,7 @@ Le cluster est organisé en namespaces isolés pour une séparation claire des r
 \centering
 \caption{Namespaces Kubernetes du VOC}
 \small
-\begin{tabular}{l l p{8cm}}
+\begin{tabularx}{\textwidth}{L{2.1cm} L{4.3cm} X}
 \toprule
 \textbf{Namespace} & \textbf{Composants} & \textbf{Rôle} \\
 \midrule
@@ -353,8 +343,9 @@ Le cluster est organisé en namespaces isolés pour une séparation claire des r
 \texttt{scanning}   & Jobs Katana, Grype, Nuclei, ffuf, SQLMap, XSStrike & Jobs éphémères (supprimés après chaque run) \\
 \texttt{targets}    & Juice Shop, DVWA & Applications cibles vulnérables \\
 \texttt{monitoring} & Grafana, Prometheus & Observabilité (optionnel, $\approx$2~Go RAM) \\
+\texttt{voc-siem}   & Agent Wazuh (DaemonSet) & SIEM/HIDS (optionnel). Namespace séparé car l'agent doit monter des volumes \texttt{hostPath} pour surveiller le nœud, ce que le niveau Pod Security \texttt{baseline} de \texttt{voc-core} interdit \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 \section{Cibles Vulnérables}
@@ -364,12 +355,12 @@ Deux applications aux profils métier opposés servent de cibles~:
 \centering
 \caption{Profil métier des cibles vulnérables}
 \small
-\begin{tabularx}{\textwidth}{L{2.5cm} L{2.2cm} c c L{2.8cm} X}
+\begin{tabularx}{\textwidth}{L{1.9cm} L{3.4cm} c c L{2.2cm} X}
 \toprule
 \textbf{Cible} & \textbf{Image Docker} & \textbf{Criticité} & \textbf{Exposition} & \textbf{Données} & \textbf{Intérêt} \\
 \midrule
-Juice Shop & \texttt{bkimminich/juice-shop:v16.0.0} & 5/5 & Internet & Financières & Findings amplifiés ($\times$1.60) \\
-DVWA       & \texttt{vulnerables/web-dvwa:latest}    & 2/5 & Interne  & Internes    & Findings atténués ($\times$0.79) \\
+Juice Shop & \texttt{bkimminich/\allowbreak juice-shop:\allowbreak v16.0.0} & 5/5 & Internet & Financières & Findings amplifiés ($\times$1.60) \\
+DVWA       & \texttt{vulnerables/\allowbreak web-dvwa:\allowbreak latest}    & 2/5 & Interne  & Internes    & Findings atténués ($\times$0.79) \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -779,7 +770,7 @@ Un système de retry avec backoff exponentiel gère les erreurs 5xx transitoires
 \chapter{Pipeline de Scan Complet}
 % ============================================================
 
-Le pipeline complet est orchestré par le script \texttt{scripts/scan-all.sh} (988 lignes) et s'exécute en environ 10--12 minutes (mode complet) ou 6 minutes (mode \texttt{--quick}).
+Le pipeline complet est orchestré par le script \texttt{scripts/scan-all.sh} (1003 lignes). Sur les exécutions enregistrées dans la base \texttt{voc-scans.db}, un run complet prend entre 18 et 33~minutes (médiane $\approx$24~min), et le mode \texttt{--quick} environ 6~minutes.
 
 \section{Étape 1~: Vérification des Prérequis}
 Le script vérifie la connectivité à l'API DefectDojo (6 tentatives avec 5~s d'intervalle) et l'état des pods cibles (\texttt{juice-shop} et \texttt{dvwa} en phase \texttt{Running}). Cette vérification est nécessaire car les port-forwards peuvent mettre quelques secondes à se stabiliser après un redémarrage.
@@ -1173,7 +1164,7 @@ Trois dimensions sont pondérées~:
 \centering
 \caption{Dimensions du contexte métier et pondérations}
 \small
-\begin{tabular}{l c p{8cm}}
+\begin{tabularx}{\textwidth}{L{3.0cm} c X}
 \toprule
 \textbf{Dimension} & \textbf{Poids} & \textbf{Valeurs et facteurs} \\
 \midrule
@@ -1181,7 +1172,7 @@ Exposition     & 0.4 & internet (1.0), dmz (0.75), interne (0.45), isolé (0.15)
 Criticité      & 0.4 & 1 à 5, mappé linéairement sur 0.2..1.0 \\
 Classification & 0.2 & financial/phi (1.0), pii (0.85), confidential (0.70), internal (0.40), public (0.15) \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 Le multiplicateur de contexte~:
@@ -1241,7 +1232,7 @@ Sans le modèle de contexte, l'équipe aurait traité en priorité le HIGH sur D
 \centering
 \caption{Endpoints de l'API FastAPI du service de priorisation}
 \small
-\begin{tabular}{l l p{7.5cm}}
+\begin{tabularx}{\textwidth}{L{1.6cm} L{3.4cm} X}
 \toprule
 \textbf{Méthode} & \textbf{Endpoint} & \textbf{Rôle} \\
 \midrule
@@ -1253,7 +1244,7 @@ Sans le modèle de contexte, l'équipe aurait traité en priorité le HIGH sur D
 \texttt{GET}  & \texttt{/state}          & Résultats de la dernière passe (scorés, ignorés, erreurs) \\
 \texttt{GET}  & \texttt{/healthz}        & Health check pour la readiness probe k8s \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 Le scoring est exécuté automatiquement toutes les heures (configurable via \texttt{SCORING\_INTERVAL\_SECONDS}). Chaque finding scoré reçoit un tag \texttt{priority-NN}, des tags de contexte (\texttt{voc-asset-*}, \texttt{voc-exposure-*}, \texttt{voc-crit-*}), une mise à jour du \texttt{risk\_score} dans DefectDojo, et un changement de sévérité si la bande de priorité diffère.
@@ -1294,7 +1285,7 @@ L'orchestrateur n8n est déployé dans \texttt{voc-core} et exécute un workflow
 \centering
 \caption{Fonctionnalités du workflow n8n}
 \small
-\begin{tabular}{l p{9cm}}
+\begin{tabularx}{\textwidth}{L{4.2cm} X}
 \toprule
 \textbf{Fonctionnalité} & \textbf{Description} \\
 \midrule
@@ -1303,8 +1294,9 @@ Job orchestration & Crée le Job k8s orchestrateur, poll le statut jusqu'à comp
 Routage priorité  & Interroge DefectDojo toutes les 5~min, branche selon le tag \texttt{priority-*} \\
 Dashboard API     & \texttt{GET /webhook/voc/dashboard}~: résumé findings par sévérité, scanner, cible \\
 Health checks     & Ping de tous les services toutes les 5~min \\
+Ingestion SIEM    & \texttt{POST /webhook/voc/alert/wazuh}~: reçoit les alertes Wazuh, les normalise et crée l'alerte TheHive correspondante \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 % -------------------------------------------------------
@@ -1391,7 +1383,51 @@ Activable via \texttt{VOC\_ENABLE\_MONITORING=1} ($\approx$2~Go RAM). Alors que 
 \end{figure}
 \FloatBarrier
 
-Wazuh (SIEM/HIDS) est activable séparément via \texttt{VOC\_ENABLE\_WAZUH=1} ($\approx$1.5~Go RAM). Son API alimente le pipeline existant pour corréler les événements système avec les vulnérabilités détectées.
+\section{SIEM~: Wazuh (optionnel)}
+Le volet «~détection~» de la plateforme est activable via \texttt{VOC\_ENABLE\_WAZUH=1} ou \texttt{voc-deploy wazuh} ($\approx$2~Go RAM). Là où les scanners indiquent ce qui \emph{pourrait} être exploité, le SIEM indique ce qui l'est \emph{effectivement}. Deux composants sont déployés~:
+
+\begin{itemize}[nosep]
+    \item le \textbf{manager} (namespace \texttt{voc-core})~: moteur de règles et de décodeurs, enrôlement des agents (port~1515, protégé par mot de passe), API~REST (port~55000)~;
+    \item un \textbf{agent} en DaemonSet (namespace \texttt{voc-siem})~: surveillance d'intégrité des fichiers (FIM) en temps réel sur \texttt{/etc}, \texttt{/bin} et \texttt{/sbin} du nœud, détection de rootkits et audit de configuration CIS (SCA).
+\end{itemize}
+
+Les deux composants sont épinglés en version~4.14.6~: les versions de l'agent et du manager doivent correspondre, et l'image \texttt{wazuh/wazuh-agent} n'est publiée qu'à partir de la 4.13, ce qui fixe le plancher de version.
+
+La configuration de l'agent n'est pas définie dans son manifeste~: l'agent s'enrôle dans le groupe \texttt{default} et le manager lui pousse la configuration partagée (\texttt{agent.conf}). C'est le mode d'exploitation prévu par Wazuh~: un seul endroit où modifier la politique, tous les agents suivent.
+
+\subsection{Namespace dédié~: une dérogation isolée}
+Le namespace \texttt{voc-core} applique le niveau Pod Security \texttt{baseline}, qui interdit les volumes \texttt{hostPath}. Or un agent HIDS dont le rôle est précisément de surveiller le système de fichiers du nœud ne peut pas fonctionner sans. Plutôt que d'abaisser \texttt{voc-core} en \texttt{privileged} --- ce qui aurait accordé la même dérogation à DefectDojo, n8n et TheHive --- seul l'agent est déplacé dans \texttt{voc-siem}, un namespace en \texttt{privileged} dont les niveaux \texttt{audit} et \texttt{warn} restent à \texttt{baseline}. Le manager, lui, reste dans \texttt{voc-core} et respecte la politique.
+
+\subsection{Absence d'indexeur~: conséquence sur le transport des alertes}
+La pile Wazuh complète ajoute un indexeur OpenSearch et un dashboard, soit 5 à 6~Go de RAM supplémentaires~: incompatible avec la contrainte de 16~Go. Or l'API~REST du manager \emph{ne distribue pas les alertes} --- dans un déploiement complet, celles-ci sont lues depuis l'indexeur. Le transport retenu est donc le démon \texttt{integrator} du manager, qui émet en HTTP POST chaque alerte de niveau $\geq$~7 vers un webhook~:
+
+\begin{center}
+\texttt{agent $\rightarrow$ manager (règles) $\rightarrow$ integrator $\rightarrow$ n8n $\rightarrow$ TheHive}
+\end{center}
+
+Le webhook pointe sur n8n (\texttt{POST /webhook/voc/alert/wazuh}), qui normalise l'alerte et crée une alerte TheHive~: le niveau Wazuh (0--15) est converti en sévérité TheHive (1--4), les identifiants de techniques MITRE ATT\&CK deviennent des tags, et les adresses~IP source, noms d'hôtes et chemins de fichiers modifiés deviennent des observables exploitables par l'analyste. Alertes SIEM et findings des scanners convergent ainsi vers la même file de cas.
+
+\subsection{Portée réelle de la surveillance}
+L'agent s'exécute dans un conteneur. Seule la surveillance d'intégrité des fichiers observe réellement le nœud, via les montages \texttt{hostPath} en lecture seule (\texttt{/host/etc}, \texttt{/host/bin}, \texttt{/host/sbin}). Les modules SCA, syscollector et rootcheck analysent en revanche le conteneur de l'agent lui-même~: c'est pourquoi le système d'exploitation remonté est Amazon Linux~2023 (l'image de l'agent) et non celui du nœud, et pourquoi une majorité de contrôles CIS ressortent en \texttt{not applicable} --- ils testent des partitions et des paramètres noyau qui n'existent pas dans un conteneur. Étendre ces trois modules au nœud demanderait \texttt{hostPID}, \texttt{hostNetwork} et un montage de \texttt{/proc}~; le namespace \texttt{voc-siem} l'autorise déjà, mais ce n'était pas nécessaire pour démontrer la chaîne de détection.
+
+\subsection{Validation de bout en bout}
+La commande \texttt{voc-wazuh test} génère deux événements bénins et suit leur trajet~: dix échecs d'authentification SSH dans un log surveillé (règle~5712, «~sshd brute force~», niveau~10) et la modification d'un fichier sous surveillance d'intégrité temps réel (règle~550, niveau~7). Les deux aboutissent en alertes TheHive en une trentaine de secondes, avec la sévérité, les tags MITRE et les observables attendus.
+
+\FloatBarrier
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/wazuh_test.png}
+    \caption{Validation de bout en bout de la chaîne de détection (\texttt{voc-wazuh test})}
+    \label{fig:wazuh_test}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/thehive_wazuh_alert.png}
+    \caption{Alerte Wazuh convertie en alerte TheHive par le workflow n8n}
+    \label{fig:thehive_wazuh_alert}
+\end{figure}
+\FloatBarrier
 
 
 % ============================================================
@@ -1436,16 +1472,16 @@ Variables d'environnement de contrôle~:
 \centering
 \caption{Switches de configuration au démarrage}
 \small
-\begin{tabular}{l p{9cm}}
+\begin{tabularx}{\textwidth}{L{4.2cm} X}
 \toprule
 \textbf{Variable} & \textbf{Effet} \\
 \midrule
 \texttt{VOC\_SCAN\_ON\_START=1}    & Toujours lancer les scans au démarrage (\texttt{0} = jamais) \\
 \texttt{VOC\_FORCE\_DEPLOY=1}      & Ignorer le cache d'état, redéployer tout \\
-\texttt{VOC\_ENABLE\_WAZUH=1}      & Déployer le manager Wazuh \\
+\texttt{VOC\_ENABLE\_WAZUH=1}      & Déployer le SIEM Wazuh (manager + agent) \\
 \texttt{VOC\_ENABLE\_MONITORING=1} & Déployer Grafana + Prometheus \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 \section{Historique des Scans (\texttt{voc-history})}
@@ -1475,7 +1511,7 @@ Run ID  Timestamp            Duration  Grype  Nuclei  SQLi  ffuf  XSS  Total
 \centering
 \caption{Commandes VOC disponibles dans le toolbox}
 \small
-\begin{tabular}{l p{9cm}}
+\begin{tabularx}{\textwidth}{L{5.4cm} X}
 \toprule
 \textbf{Commande} & \textbf{Description} \\
 \midrule
@@ -1488,10 +1524,16 @@ Run ID  Timestamp            Duration  Grype  Nuclei  SQLi  ffuf  XSS  Total
 \texttt{voc-status}               & État du cluster et des services \\
 \texttt{voc-sync-keys}            & Synchroniser les clés API entre les pods \\
 \texttt{voc-deploy <composant>}   & Redéployer un composant spécifique \\
+\texttt{voc-test-tool <outil> <cible>} & Exécuter un seul outil (\texttt{katana}, \texttt{ffuf}, \texttt{sqlmap}, \texttt{xss}, \texttt{nuclei}) \\
+\texttt{voc-wazuh status}         & Manager Wazuh, agents enrôlés, destination des alertes \\
+\texttt{voc-wazuh agents}         & Inventaire des agents et état de connexion \\
+\texttt{voc-wazuh alerts [N]}     & Dernières alertes enregistrées par le manager \\
+\texttt{voc-wazuh test}           & Générer des événements de test et suivre la chaîne de détection \\
+\texttt{voc-wazuh api <chemin>}   & Appel brut à l'API REST Wazuh \\
 \texttt{voc-refresh}              & Vider le cache d'état de déploiement \\
 \texttt{voc-help}                 & Liste complète des commandes \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 
@@ -1521,13 +1563,13 @@ Le pipeline a produit des findings sur les deux cibles, couvrant plusieurs caté
 \toprule
 \textbf{Scanner} & \textbf{Juice Shop} & \textbf{DVWA} & \textbf{Total} \\
 \midrule
-Grype (SCA)    & 88 & 0 & 88 \\
+Grype (SCA)    & 88 & 2097 & 2185 \\
 Nuclei (DAST)  & 0 & 0 & 0 \\
 ffuf (Fuzzing) & 1 & 1 & 2 \\
 SQLMap (SQLi)  & 1 & 0 & 1 \\
 XSStrike (XSS) & 1307 & 0 & 1307 \\
 \midrule
-\textbf{Total} & \textbf{1397} & \textbf{1} & \textbf{1398} \\
+\textbf{Total} & \textbf{1397} & \textbf{2098} & \textbf{3495} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1627,14 +1669,23 @@ Les tags écrits sur le finding (\texttt{voc-asset-juice-shop}, \texttt{voc-expo
 \chapter{Difficultés Rencontrées et Solutions}
 % ============================================================
 
-\begin{table}[H]
-\centering
-\caption{Problèmes rencontrés et solutions apportées}
 \small
-\begin{tabularx}{\textwidth}{L{3.5cm} X X}
+\begin{longtable}{L{3.2cm} L{5.8cm} L{5.8cm}}
+\caption{Problèmes rencontrés et solutions apportées}\\
 \toprule
 \textbf{Problème} & \textbf{Impact} & \textbf{Solution} \\
 \midrule
+\endfirsthead
+\multicolumn{3}{c}{{\small \textit{-- suite de la page précédente --}}} \\
+\toprule
+\textbf{Problème} & \textbf{Impact} & \textbf{Solution} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{{\small \textit{suite page suivante}}} \\
+\endfoot
+\bottomrule
+\endlastfoot
 Contrainte mémoire (16~Go) & OWASP ZAP provoque des OOM sur le nœud k3d & ZAP retiré~; scanners restants exécutés en parallèle contrôlé \\
 \addlinespace
 Findings DAST sans CVSS & Nuclei, ffuf, SQLMap, XSStrike ne fournissent pas de CVSS~; score technique = 0 & Table de fallback \texttt{SEVERITY\_TO\_CVSS} dans \texttt{scoring.py} \\
@@ -1652,9 +1703,18 @@ Image locale non trouvée par kubelet & \texttt{prioritization-service:0.1.0} ab
 Formats de sortie hétérogènes & Chaque scanner produit un format différent (JSON, logs texte, JSONL) & Script de normalisation unifié (\texttt{normalize-findings.py}) \\
 \addlinespace
 DVWA init non deterministe & \texttt{setup.php} peut échouer si appelé trop tôt & Hook \texttt{postStart} + délai \texttt{sleep 10} dans le manifest DVWA \\
-\bottomrule
-\end{tabularx}
-\end{table}
+\addlinespace
+Wazuh sans indexeur & L'API REST du manager ne distribue pas les alertes~; sans indexeur OpenSearch (5--6~Go) elles restent dans un fichier local & Utilisation du démon \texttt{integrator}, qui pousse chaque alerte vers un webhook n8n --- ni polling, ni indexeur \\
+\addlinespace
+Agent HIDS et Pod Security & L'agent doit monter des \texttt{hostPath} pour surveiller le nœud, interdits par le niveau \texttt{baseline} de \texttt{voc-core} & Namespace dédié \texttt{voc-siem} en \texttt{privileged}~: la dérogation est isolée au seul composant qui en a besoin \\
+\addlinespace
+Nuclei ne remontait aucun finding & Deux causes cumulées. (1)~La liste d'URLs de la phase~1 (53~entrées) pointe toutes sur le \emph{même} hôte~; nuclei étant un scanner d'hôte, tout le jeu de templates était rejoué 53~fois, soit 118\,296 requêtes et un dépassement systématique du délai d'attente. (2)~Le filtre \texttt{-severity low,medium,high,critical} écartait les résultats \texttt{info}, qui représentent 18 des 19 détections réelles sur ces cibles & Déduplication de la liste en hôtes avant l'appel à nuclei (la liste complète reste l'entrée de SQLMap et XSStrike), ajout de \texttt{info} au filtre, et restriction à \texttt{-t http/}~: 2232 requêtes, 2~minutes, 19 findings \\
+\addlinespace
+Automatisation post-scan morte & \texttt{TOOLBOX\_DIR} n'était défini nulle part~; sous \texttt{set -u} l'expansion interrompait \texttt{scan-all.sh} juste avant la passe de priorisation, jamais exécutée après un scan & Variable dérivée de \texttt{SCRIPT\_DIR}, avec repli explicite si le profil est absent \\
+\addlinespace
+Import de workflow n8n masqué & L'erreur d'import était avalée par \texttt{|| true}~: le cluster gardait une ancienne version du workflow alors que le dépôt semblait à jour & Erreurs remontées, réessais bornés, et redémarrage de n8n après import \\
+\end{longtable}
+\normalsize
 
 
 % ============================================================
@@ -1669,6 +1729,7 @@ Le VOC déployé dans le cadre de ce projet est capable de~:
     \item Centraliser et dédupliquer les résultats dans DefectDojo via un script de normalisation unifié.
     \item Prioriser les findings selon un modèle à trois dimensions (technique, menace, contexte métier) qui réordonne les vulnérabilités en fonction de leur impact réel.
     \item Router automatiquement les incidents critiques vers TheHive via n8n.
+    \item Détecter les événements système (intégrité des fichiers, tentatives d'authentification) avec Wazuh et faire converger ces alertes vers la même file de cas que les findings des scanners~: les scanners indiquent ce qui \emph{pourrait} être exploité, le SIEM ce qui l'est \emph{effectivement}.
     \item Monitorer l'état du système via Grafana et Prometheus.
     \item Fonctionner dans un environnement contraint (16~Go de RAM) avec un déploiement reproductible.
 \end{itemize}

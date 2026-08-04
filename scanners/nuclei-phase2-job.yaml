@@ -16,7 +16,13 @@ metadata:
   name: __JOB_NAME__
   namespace: scanning
 spec:
-  ttlSecondsAfterFinished: 300
+  # MUST exceed the worst-case harvest wait in scripts/scan-all.sh (1800s per
+  # target, waited serially). At the old 300s, the juice-shop job finished,
+  # Kubernetes garbage-collected it five minutes later while the harvest was
+  # still blocked on dvwa, and the harvest then reported
+  # "Job nuclei-juice-shop-... not found after 6 checks" — a completed scan
+  # whose results were deleted before anyone read them.
+  ttlSecondsAfterFinished: 3600
   template:
     spec:
       restartPolicy: Never
@@ -34,55 +40,45 @@ spec:
           args:
             - |
               set -e
-              # Web-relevant tags only.
+              # Nuclei is a HOST scanner, not a URL scanner: its templates
+              # append their own paths. Phase 1 hands us all_urls.txt, which for
+              # Juice Shop is 53 entries that are all the SAME host — mostly
+              # Angular SPA fragments (#/about, #/basket) the server never even
+              # sees. Passing that list ran the entire template set once per
+              # URL: 118296 requests for one web app, which is why the job blew
+              # through a 1800s timeout and got reported as SKIP every run.
               #
-              # Measured, not assumed: dropping the `cve` tag took the loaded
-              # template count from 5975 to 5417 — 9%, not the "half" it was
-              # worth guessing at. The tag list is NOT the cost driver, so
-              # `cve` stays and the coverage story stays intact.
+              # Deduplicating to the host first is the whole fix. Measured on
+              # juice-shop, same templates, same flags:
               #
-              # The real startup cost is that nuclei downloads and
-              # signature-verifies the whole template set on EVERY run (the
-              # log opens with "nuclei-templates are not installed,
-              # installing..." despite the note below). 15 minutes in, a run
-              # had reached "Templates clustered" without issuing a single
-              # request. The scan itself is cheap by comparison: ~15900
-              # requests at 75/s is under four minutes.
+              #   -l all_urls.txt (53 URLs) : 118296 requests, >31 min, timeout
+              #   -l hosts.txt    (1 host)  :   2232 requests,   2 min, 19 hits
               #
-              # Mitigated here with more CPU for verification and a longer
-              # harvest timeout in scripts/scan-all.sh. The durable fix is to
-              # cache /root/nuclei-templates in a PVC, exactly like
-              # scanners/grype-db-pvc.yaml already does for the Grype DB.
-              # Excludes dos/fuzz/intrusive/brute-force which are slow,
-              # noisy, or inappropriate for automated lab scanning.
-              # We don't need to update templates because they are baked into the image.
+              # The full URL inventory is still the right input for sqlmap and
+              # xsstrike, which genuinely need parameterised URLs — this only
+              # changes what nuclei is pointed at.
+              #
+              # `info` is included in -severity on purpose. On these targets 18
+              # of the 19 matches are info-severity (exposed Swagger endpoint,
+              # Prometheus metrics, missing security headers, robots.txt); the
+              # old low,medium,high,critical filter is why every run reported
+              # zero findings even when nuclei completed. The prioritization
+              # service re-scores everything by asset context anyway, so an
+              # info finding on an internet-facing asset still surfaces.
+              #
+              # -t http/ restricts to HTTP templates. The network templates were
+              # probing odd ports (dvwa:43800) and burning a full -timeout on
+              # each closed port.
               if [ -s /targets/all_urls.txt ]; then
-                # Pacing matters more than template count here. Juice Shop is
-                # a single-process Node app capped at 500m CPU: at the old
-                # -rate-limit 300 / -bulk-size 50 it stopped answering within
-                # seconds, nuclei counted 30 timeouts, marked the host
-                # "unresponsive permanently" and dropped it from the target
-                # list. Every run ended "Scan completed. No results found."
-                # after ~50s with an empty JSONL — which imported cleanly as
-                # zero findings, so nothing looked broken downstream.
-                #
-                #   -rate-limit 75    requests/sec the target can actually serve.
-                #                     300 collapsed it at 500m CPU; 25 was safe
-                #                     but took 35+ min. 75 against the 2-core
-                #                     limit set in k8s/targets/juice-shop.yaml
-                #                     is the working balance.
-                #   -bulk-size 25     templates in flight per target
-                #   -c 25             concurrent template threads
-                #   -max-host-error 100  survive transient timeouts instead of
-                #                     abandoning the host after 30
-                #   -ni               no Interactsh: OAST callbacks to oast.fun
-                #                     cannot resolve back into this cluster and
-                #                     only added timeouts
-                nuclei -l /targets/all_urls.txt \
-                      -severity low,medium,high,critical \
-                      -tags cve,misconfig,exposure,tech,xss,sqli,lfi,rfi,rce,ssrf,redirect,auth-bypass,default-login \
+                sed -E 's|(https?://[^/]+).*|\1|' /targets/all_urls.txt \
+                  | sort -u > /work/hosts.txt
+                echo "nuclei targets (deduplicated to hosts):"
+                cat /work/hosts.txt
+                nuclei -l /work/hosts.txt \
+                      -t http/ \
+                      -severity info,low,medium,high,critical \
                       -etags dos,fuzz,intrusive,brute-force \
-                      -timeout 10 \
+                      -timeout 5 \
                       -bulk-size 25 \
                       -c 25 \
                       -rate-limit 75 \
